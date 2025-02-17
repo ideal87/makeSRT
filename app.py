@@ -52,57 +52,27 @@ def split_audio(file_path, chunk_length=200):
 
     return chunks
 
-def shift_timestamp(ts, offset):
-    """
-    Shifts a timestamp (format HH:MM:SS,mmm) by offset seconds.
-    """
-    h, m, s_ms = ts.split(':')
-    s, ms = s_ms.split(',')
-    total_seconds = int(h)*3600 + int(m)*60 + int(s) + int(ms) / 1000
-    new_total = total_seconds + offset
-    new_h = int(new_total // 3600)
-    new_m = int((new_total % 3600) // 60)
-    new_s = int(new_total % 60)
-    new_ms = int(round((new_total - int(new_total)) * 1000))
-    return f"{new_h:02}:{new_m:02}:{new_s:02},{new_ms:03}"
-
-def adjust_srt(srt_text, offset):
-    """
-    Adjusts all timestamp lines in an SRT text by the given offset (in seconds).
-    """
-    lines = srt_text.splitlines()
-    adjusted_lines = []
-    for line in lines:
-        if '-->' in line:
-            parts = line.split('-->')
-            start_ts = parts[0].strip()
-            end_ts = parts[1].strip()
-            new_start = shift_timestamp(start_ts, offset)
-            new_end = shift_timestamp(end_ts, offset)
-            adjusted_lines.append(f"{new_start} --> {new_end}")
-        else:
-            adjusted_lines.append(line)
-    return "\n".join(adjusted_lines)
-
 def transcribe_audio(file_path):
     with open(file_path, "rb") as audio_file:
         response = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
             language="ko",
-            response_format="srt",
+            response_format="text",
             prompt="""시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회, 성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함,
-            여전도회, 긍휼, 전도사, 일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배"""
+            여전도회, 긍휼, 전도사, 일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배,
+            성경구절, 권세,"""
         )
     return response
 
 def process_text_with_gpt(transcribed_text):
     prompt = (
-        """Revise the following SRT format file so that the segments form smoother and more complete Korean sentences without changing the original meaning.
-Revise any Korean typos from the transcription process, combine segments where appropriate.
-Do not remove specific examples or phrases even though they may not sound clear to certain audience.
-Remove unnecessary filler words or conjunctions like '그리고', '그래서', '그러니까'. 
-Keep the SRT format in your response (do not include a file delimiter):"""
+        """
+        Please correct the grammar of the following Korean text in Korean Baptist Sermon context.
+        Do not ommit any sentences.
+        Remove unnecessary conjunctions like '그리고,' 그래서,' '그러니까' where applicable.
+        When using quotations, use double quotations unless nested inside another quotation.
+        Do not include introduction or outro in your response:\n"""
         + transcribed_text
     )
     response = client.chat.completions.create(
@@ -124,10 +94,6 @@ def process_chunk(chunk_info):
         logging.info(f"Transcription for chunk {index} completed.")
         processed_text = process_text_with_gpt(transcribed_text)
         logging.info(f"Processing with GPT for chunk {index} completed.")
-
-        # Adjust the SRT timestamps based on the chunk offset
-        offset = index * CHUNK_LENGTH
-        processed_text = adjust_srt(processed_text, offset)
 
         os.remove(chunk)
         logging.info(f"Deleted chunk file: {chunk}")
@@ -156,8 +122,8 @@ def process_audio(file_path):
 
 # --- Streamlit App ---
 
-st.title("MP3 to SRT Transcription & Revision")
-st.write("Upload an MP3 file to generate a revised SRT transcription.")
+st.title("MP3 to Text Transcription & Revision")
+st.write("Upload an MP3 file to generate a revised text transcription.")
 
 uploaded_file = st.file_uploader("Choose an MP3 file", type=["mp3"])
 
@@ -166,6 +132,10 @@ if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_file_path = tmp_file.name
+
+        # Extract the base name from the original uploaded file name
+        base_name = os.path.splitext(uploaded_file.name)[0]
+        output_file_name = f"{base_name}_processed.txt"
 
     if st.button("Process Audio"):
         with st.spinner("Processing audio, please wait..."):
@@ -181,7 +151,7 @@ if uploaded_file is not None:
                 st.download_button(
                     label="Download SRT File",
                     data=srt_content,
-                    file_name="processed.srt",
+                    file_name=output_file_name,
                     mime="text/plain",
                 )
             except Exception as e:
