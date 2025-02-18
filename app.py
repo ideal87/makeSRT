@@ -98,11 +98,90 @@ def transcribe_audio(file_path):
 
 def process_text_with_gpt(transcribed_text):
     prompt = (
-        """Revise the following SRT format file so that the segments form smoother and more complete Korean sentences without changing the original meaning.
-Revise any Korean typos from the transcription process, combine segments where appropriate.
-Do not remove specific examples or phrases even though they may not sound clear to certain audience.
-Remove unnecessary filler words or conjunctions like '그리고', '그래서', '그러니까'. 
-Keep the SRT format in your response (do not include a file delimiter):"""
+        """
+        **Task:** Act as a **subtitle optimization engine** to process an SRT file. Follow these steps **exactly**, and include **detailed reasoning** for all changes.  
+        ---
+        ### **1. Parse & Clean the Input SRT**  
+        - **Actions:**  
+          - Read segments, noting start/end times and text.  
+          - **Revise Korean typos** (e.g., spacing, spelling).  
+          - **Remove filler words**: ‘그리고’, ‘그래서’, ‘그러니까’ (unless critical to meaning).  
+          - **Preserve unclear phrases/examples** (e.g., jargon, names) even if ambiguous.  
+        **Reasoning Format:**  
+        > “Segment [INDEX]:  
+        > - Original: ‘[TEXT]’  
+        > - Typos Revised: ‘[CORRECTED_TEXT]’  
+        > - Removed Fillers: [‘그리고’, ...]  
+        > - Retained Unclear Phrase: ‘[PHRASE]’.”  
+        ---
+        ### **2. Combine Short Segments**  
+        **Rules:**  
+        - **Short** = Duration **<4s** OR text **<25 characters**.  
+        - **Combine Priority**:  
+          1. Previous segment if its text ≤70 characters.  
+          2. Next segment if previous is too long.  
+        **Reasoning Format:**  
+        > “Segment [INDEX] is short ([DURATION]s / [TEXT_LENGTH] chars).  
+        > - Combined with [PREV/NEXT] segment [INDEX].  
+        > - New text: ‘[COMBINED_TEXT]’.  
+        > - Adjusted end time to [NEW_END_TIME].”  
+        ---
+        ### **3. Split Long Text Segments**  
+        **Rules:**  
+        - **Split** if text **>90 characters**.  
+        - **Split Point**: Nearest punctuation (., ,, ") near middle (≥20 chars before split).  
+        - **Divide duration evenly** between splits.  
+
+        **Reasoning Format:**  
+        > “Segment [INDEX]: Text length [LENGTH].  
+        > - Split at [PUNCTUATION] (position [SPLIT_INDEX]):  
+        >   - Part 1: ‘[TEXT_PART1]’ ([DURATION_PART1]s).  
+        >   - Part 2: ‘[TEXT_PART2]’ ([DURATION_PART2]s).”  
+        ---
+        ### **4. Revise Korean Text for Grammar, Clarity, and Translation Readiness**
+        **Rules:**  
+        - Preserve theological meaning and tone while improving structure.
+        - Do not change Korean Bible Quotes.  
+        - Optimize for accurate English translation by resolving ambiguities.
+        - Grammar & Syntax Rules:
+        Fix particle errors (은/는 vs. 이/가) and verb ending mismatches.
+        Convert sentence fragments to complete sentences (e.g., “하나님의 사랑은 크시니” → “하나님의 사랑은 크시므로”).
+        Maintain formal liturgical tone unless original uses intentional colloquialisms.
+        ---
+        ### **5. Combine short blank segments to the previous segments**
+        **Rules:**  
+        - For each segment with no text and has duration of 4 or less, combine it to the previous segement.
+        ---
+        ### **6. Generate Output SRT**  
+        - Reindex all segments.  
+        - **Format:**  
+          ```  
+          [INDEX]  
+          [START_TIME] --> [END_TIME]  
+          [TEXT]  
+          ```  
+        - **Validation**:  
+          - No text >90 chars.  
+          - No short segments unless unavoidable.  
+        ---  
+        **Example Output:**  
+        ```  
+        1  
+        00:00:10,000 --> 00:00:14,500  
+        Revised text without fillers. Retained unclear term "ABC123".  
+
+        2  
+        00:00:14,500 --> 00:00:16,000  
+        First half of a long sentence.  
+
+        3  
+        00:00:16,000 --> 00:00:18,000  
+        Second half of a long sentence.  
+        ```  
+        ---  
+        **Instructions for GPT:**  
+        - **Output Only** the final SRT.  
+        - **Do not** add summaries or disclaimers or reasoning annotation or file delimiter like ```"""
         + transcribed_text
     )
     response = client.chat.completions.create(
