@@ -76,7 +76,7 @@ def process_text_with_gpt(transcribed_text):
         + transcribed_text
     )
     response = client.chat.completions.create(
-        model="o3-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content.strip()
