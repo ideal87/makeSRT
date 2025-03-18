@@ -69,10 +69,10 @@ def process_text_with_gpt(transcribed_text):
     prompt = (
         """
         Please correct the grammar of the following Korean text in Korean Baptist Sermon context.
-        Do not ommit any sentences.
+        Do not omit any words even though they sound awkward.
         Remove unnecessary conjunctions like '그리고,' 그래서,' '그러니까' where applicable.
-        When using quotations, use double quotations unless nested inside another quotation.
-        Do not include introduction or outro in your response:\n"""
+        Use double quotations for Bible or other book quotes. 
+        Do not include introduction or outro in your response\n"""
         + transcribed_text
     )
     response = client.chat.completions.create(
