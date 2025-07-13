@@ -61,7 +61,7 @@ def transcribe_audio(file_path):
             response_format="text",
             prompt="""시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회, 성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함,
             여전도회, 긍휼, 전도사, 일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 다윗의, 복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배,
-            성경구절, 권세, 기독학교, 여호와, 도전오십가정, 신약, 시게타,십자가복음, 남녀전도회, 야고보"""
+            성경구절, 권세, 기독학교, 여호와, 도전오십가정, 신약, 시게타,십자가복음, 남녀전도회, 야고보, 은혜, 새물결, 두드림, 투게더"""
         )
     return response
 
@@ -76,7 +76,7 @@ def process_text_with_gpt(transcribed_text):
         + transcribed_text
     )
     response = client.chat.completions.create(
-        model="o4-mini",
+        model="o3",
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content.strip()
