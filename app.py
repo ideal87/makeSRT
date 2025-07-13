@@ -62,50 +62,6 @@ def transcribe_audio(file_path):
             prompt="""시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회, 성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함,
             여전도회, 긍휼, 전도사, 일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 다윗의, 복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배,
             성경구절, 권세, 기독학교, 여호와, 도전오십가정, 신약, 시게타,십자가복음, 남녀전도회, 야고보"""
-def split_audio(file_path, chunk_length=200):
-    """
-    Splits an audio file into chunks of specified length.
-    Returns:
-        List of tuples: (chunk_index, chunk_filename)
-    """
-    global CHUNK_LENGTH
-    CHUNK_LENGTH = chunk_length
-
-    chunks = []
-    base_name = os.path.splitext(file_path)[0]
-    output_pattern = f"{base_name}_chunk_%03d.mp3"
-    
-    command = [
-        'ffmpeg',
-        '-i', file_path,
-        '-f', 'segment',
-        '-segment_time', str(chunk_length),
-        '-c', 'copy',
-        output_pattern
-    ]
-    subprocess.run(command, check=True)
-    
-    index = 0
-    while True:
-        chunk_file = f"{base_name}_chunk_{index:03d}.mp3"
-        if os.path.exists(chunk_file):
-            chunks.append((index, chunk_file))
-            index += 1
-        else:
-            break
-
-    return chunks
-
-def transcribe_audio(file_path):
-    with open(file_path, "rb") as audio_file:
-        response = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            language="ko",
-            response_format="text",
-            prompt="""시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회, 성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함,
-            여전도회, 긍휼, 전도사, 일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 다윗의, 복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배,
-            성경구절, 권세, 기독학교, 여호와, 도전오십가정, 신약, 시게타,십자가복음, 남녀전도회, 야고보"""
         )
     return response
 
