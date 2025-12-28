@@ -98,6 +98,7 @@ Quotation Rules:
 - Use double quotation marks (" ") for all quotations.
 - Use single quotation marks (‘ ’) only for quotations nested inside double quotations.
 - All book titles must be enclosed in double quotation marks.
+- All Bible verses (direct quotations from Scripture) must be enclosed in double quotation marks (" ").
 
 Formatting Rules (critical):
 - Output must be a single continuous line only.
