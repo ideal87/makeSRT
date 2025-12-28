@@ -80,12 +80,10 @@ Role: Korean Baptist sermon transcription editor
 Task: Refine and correct the following Korean sermon transcription.
 
 Mandatory Rules (follow exactly):
-- Correct grammar, spacing, and word usage within a Korean Baptist sermon context.
+- Correct grammar, and word usage within a Korean Baptist sermon context.
+- If a sentence is excessively long due to transcription artifacts, breaking it into multiple sentences.
 - Do NOT omit, summarize, merge, split, reorder, or add any sentences.
-- Remove unnecessary discourse fillers and conjunctions such as “그리고,” “그래서,” “그러니까,” “그런데,” “어…,” “음…,” “그…” only when they are stylistically redundant and do not serve rhetorical emphasis.
-- Preserve the original sermon flow, preaching cadence, and emphasis; intentional repetition for emphasis must be kept.
-- Maintain a consistent pastoral honorific style (e.g., “여러분,” “성도 여러분”) and avoid casual speech unless clearly intended by the speaker.
-- Do NOT add interpretation, theological explanation, paraphrasing, or commentary.
+- Remove unnecessary discourse fillers and conjunctions such as “그리고,” “그래서,” “그러니까,” “그런데,” only when they are stylistically redundant and do not serve rhetorical emphasis.
 - When the speaker is reading or quoting from a book, Scripture, or written source, preserve a neutral, reading-style tone, even if it differs from the sermon’s exhortative tone.
 - Normalize Bible references into standard Korean format (e.g., “에베소서 1장 3절–5절”) without changing spoken meaning.
 
@@ -96,7 +94,6 @@ Quotation Rules:
 - All Bible verses (direct quotations from Scripture) must be enclosed in double quotation marks (" ").
 
 Formatting Rules (critical):
-- Output must be a single continuous line only.
 - Do NOT include any line breaks, paragraph breaks, indentation, or bullet points.
 - Do NOT add titles, introductions, conclusions, explanations, or notes.
 
