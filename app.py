@@ -93,19 +93,16 @@ Quotation Rules:
 - All book titles must be enclosed in double quotation marks.
 - All Bible verses (direct quotations from Scripture) must be enclosed in double quotation marks (" ").
 
-Formatting Rules (critical):
-- Do NOT include any line breaks, paragraph breaks, indentation, or bullet points.
-- Do NOT add titles, introductions, conclusions, explanations, or notes.
-
 Output Requirement:
-- Return only the corrected Korean text, strictly following all rules above.
+- remove any line breaks.
+- Do NOT add titles, introductions, conclusions, explanations, or notes.
 
 """
         + transcribed_text
     )
 
     response = client.chat.completions.create(
-        model="o3",
+        model="o4-mini",
         messages=[{"role": "user", "content": prompt}],
     )
 
