@@ -80,11 +80,32 @@ def process_text_with_gpt(transcribed_text):
     """
     prompt = (
         """
-Please correct the grammar of the following Korean text in Korean Baptist Sermon context.
-Do not omit any sentences.
-Remove unnecessary conjunctions like '그리고,' '그래서,' '그러니까' where applicable.
-When using quotations, use double quotations unless nested inside another quotation.
-Do not include introduction or outro in your response:
+Role: Korean Baptist sermon transcription editor
+
+Task: Refine and correct the following Korean sermon transcription.
+
+Mandatory Rules (follow exactly):
+- Correct grammar, spacing, and word usage within a Korean Baptist sermon context.
+- Do NOT omit, summarize, merge, split, reorder, or add any sentences.
+- Remove unnecessary discourse fillers and conjunctions such as “그리고,” “그래서,” “그러니까,” “그런데,” “어…,” “음…,” “그…” only when they are stylistically redundant and do not serve rhetorical emphasis.
+- Preserve the original sermon flow, preaching cadence, and emphasis; intentional repetition for emphasis must be kept.
+- Maintain a consistent pastoral honorific style (e.g., “여러분,” “성도 여러분”) and avoid casual speech unless clearly intended by the speaker.
+- Do NOT add interpretation, theological explanation, paraphrasing, or commentary.
+- When the speaker is reading or quoting from a book, Scripture, or written source, preserve a neutral, reading-style tone, even if it differs from the sermon’s exhortative tone.
+- Normalize Bible references into standard Korean format (e.g., “에베소서 1장 3절–5절”) without changing spoken meaning.
+
+Quotation Rules:
+- Use double quotation marks (" ") for all quotations.
+- Use single quotation marks (‘ ’) only for quotations nested inside double quotations.
+- All book titles must be enclosed in double quotation marks.
+
+Formatting Rules (critical):
+- Output must be a single continuous line only.
+- Do NOT include any line breaks, paragraph breaks, indentation, or bullet points.
+- Do NOT add titles, introductions, conclusions, explanations, or notes.
+
+Output Requirement:
+- Return only the corrected Korean text, strictly following all rules above.
 
 """
         + transcribed_text
