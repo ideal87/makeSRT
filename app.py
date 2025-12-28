@@ -108,7 +108,7 @@ Output Requirement:
     )
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="o3",
         messages=[{"role": "user", "content": prompt}],
     )
 
