@@ -75,32 +75,38 @@ def process_text_with_gpt(transcribed_text):
     """
     prompt = (
         """
-Role: Korean Baptist sermon transcription editor
+Role:
+You are a Korean Baptist sermon transcription editor.
 
-Task: Refine and correct the following Korean sermon transcription.
+Task:
+Refine and correct the following Korean sermon transcription generated from audio.
 
-Mandatory Rules (follow exactly):
+CORE RULES — FOLLOW EXACTLY:
 
-- Correct grammar and word usage within a Korean Baptist sermon context.
-- Do NOT omit, summarize, merge, reorder, or add any sentences.
-- Do NOT change sentence boundaries unless required by transcription artifacts.
-- If a sentence exceeds 80 Korean characters and lacks proper punctuation, add commas (,) or periods (.) only to improve readability while preserving the original sentence structure and meaning.
-- Only split a sentence into multiple sentences when it is excessively long due to clear transcription artifacts.
-- Remove unnecessary discourse fillers and conjunctions such as “그리고,” “그래서,” “그러니까,” “그런데,” only when they are stylistically redundant and do not serve rhetorical emphasis.
-- When the speaker is reading or quoting from a book, Scripture, or written source, preserve a neutral, reading-style tone, even if it differs from the sermon’s exhortative tone.
-- Normalize Bible references into standard Korean format (e.g., “에베소서 1장 3절–5절”) without changing spoken meaning.
+[1. Sentence Integrity & Length Control]
+- Preserve the original sentence order and meaning.
+- Do NOT merge or reorder sentences.
+- You MAY split a sentence ONLY if it exceeds 80 Korean characters.
+- When splitting, divide it into natural, grammatically complete sentences without changing meaning.
 
-Quotation Rules:
+[2. Discourse Filler Removal]
+- Remove unnecessary discourse fillers such as “그리고,” “그래서,” “그러니까,” “그런데”
+  ONLY when they are stylistically redundant.
+- Do NOT remove fillers when they provide rhetorical emphasis or are necessary for meaning.
 
-- Use double quotation marks (" ") for all quotations.
-- Use single quotation marks (‘ ’) only for quotations nested inside double quotations.
-- All book titles must be enclosed in double quotation marks.
-- All Bible verses (direct quotations from Scripture) must be enclosed in double quotation marks (" ").
+[3. Spoken vs. Written Tone]
+- Speaker’s own sermon delivery: use natural spoken Korean polite style.
+- Written or read content (books, Scripture, documents): preserve formal written, reading-style tone.
+- Clearly distinguish spoken tone from written tone.
 
-Output Requirement:
+[4. Quotation Handling]
+- Use double quotation marks (" ") for all written or read quotations.
+- Do NOT convert paraphrases or explanations into quotations.
+- Do NOT rewrite written quotations into conversational style.
 
+[Output]
 - Remove all line breaks.
-- Do NOT add titles, introductions, conclusions, explanations, or notes.
+- Output a single continuous line of text.
 
 """
         + transcribed_text
@@ -117,8 +123,8 @@ Output Requirement:
 def process_chunk(chunk_info):
     """
     Processes a single audio chunk:
-    1) Transcribe with 4o-mini
-    2) Post-process with GPT-5.2
+    1) Transcribe with whisper-1
+    2) Post-process with o4-mini
     """
     index, chunk = chunk_info
     try:
