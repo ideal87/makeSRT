@@ -7,7 +7,7 @@ import tempfile
 from openai import OpenAI
 
 # Global constant for chunk length (in seconds)
-CHUNK_LENGTH = 120
+CHUNK_LENGTH = 200
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
@@ -58,7 +58,7 @@ def transcribe_audio(file_path):
             language="ko",
             response_format="text",
             prompt="""
-            시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회,
+            VVGA, 시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회,
             성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함, 여전도회, 긍휼, 전도사,
             일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 다윗의,
             복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배, 성경구절, 권세,
@@ -75,52 +75,40 @@ def process_text_with_gpt(transcribed_text):
     """
     prompt = (
         """
-        Role:
-        You are a Korean Baptist sermon transcription editor.
-        
-        Task:
-        Refine, correct, and normalize the following Korean sermon transcription generated from Whisper-1 audio transcription, fixing transcription errors while preserving the speaker’s original intent and structure.
-        
-        CORE RULES — FOLLOW EXACTLY:
-        
-        [0. Transcription Error Correction Scope]
-        - Actively correct Whisper-1 transcription errors, including:
-          - Misheard or phonetically similar words
-          - Incorrect spacing, particles (조사), and verb endings
-          - Broken or duplicated phrases caused by audio segmentation
-          - Incorrectly transcribed Scripture references or theological terms
-        - All corrections must preserve the original meaning.
-        - Do NOT paraphrase, summarize, or rewrite content.
-        - When uncertain, choose the correction most natural in a Korean Baptist sermon context.
-        
-        [1. Sentence Integrity & Length Control]
-        - Preserve original sentence order and meaning.
-        - Do NOT merge or reorder sentences.
-        - You MAY split a sentence ONLY if it exceeds 80 Korean characters.
-        - When splitting, create grammatically complete sentences without changing meaning.
-        
-        [2. Discourse Filler Removal]
-        - Remove unnecessary discourse fillers such as "그리고," "그래서," "그러니까," "그런데"
-          ONLY when stylistically redundant or clearly accidental.
-        - Preserve fillers when they provide rhetorical emphasis or intentional pacing.
-        
-        [3. Spoken vs. Written Tone]
-        - Speaker’s sermon delivery: natural spoken Korean polite style.
-        - Written or read content (Scripture, books, documents): formal written, reading-style tone.
-        - Clearly distinguish spoken tone from written tone.
-        - Do NOT convert written text into conversational style.
-        
-        [4. Quotation Handling]
-        - Use double quotation marks (" ") for all written or read quotations.
-        - Do NOT quote paraphrases or explanations.
-        - Do NOT rewrite written quotations into spoken style.
-        - Normalize broken or inconsistent quotation marks caused by transcription.
-        
-        [Output Rules]
-        - Remove all line breaks.
-        - Output a single continuous line of Korean text.
-        - Output ONLY the corrected transcription.
-        """
+Role:
+You are a Korean Baptist sermon transcription editor.
+
+Task:
+Refine and correct the following Korean Christian sermon transcription generated from audio.
+
+CORE RULES — FOLLOW EXACTLY:
+
+[1. Sentence Integrity & Length Control]
+- Preserve the original sentence order and meaning.
+- Do NOT merge or reorder sentences.
+- You MAY split a sentence ONLY if it exceeds 80 Korean characters.
+- When splitting, divide it into natural, grammatically complete sentences without changing meaning.
+
+[2. Discourse Filler Removal]
+- Remove unnecessary discourse fillers such as “그리고,” “그래서,” “그러니까,” “그런데”
+  ONLY when they are stylistically redundant.
+- Do NOT remove fillers when they provide rhetorical emphasis or are necessary for meaning.
+
+[3. Spoken vs. Written Tone]
+- Speaker’s own sermon delivery: use natural spoken Korean polite style.
+- Written or read content (books, Scripture, documents): preserve formal written, reading-style tone.
+- Clearly distinguish spoken tone from written tone.
+
+[4. Quotation Handling]
+- Use double quotation marks (" ") for all written or read quotations.
+- Do NOT convert paraphrases or explanations into quotations.
+- Do NOT rewrite written quotations into conversational style.
+
+[Output]
+- Remove all line breaks.
+- Output a single continuous line of text.
+
+"""
         + transcribed_text
     )
 
