@@ -7,7 +7,7 @@ import tempfile
 from openai import OpenAI
 
 # Global constant for chunk length (in seconds)
-CHUNK_LENGTH = 200
+CHUNK_LENGTH = 120
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
@@ -84,10 +84,10 @@ Refine and correct the following Korean Christian sermon transcription generated
 CORE RULES — FOLLOW EXACTLY:
 
 [1. Sentence Integrity & Length Control]
-- Preserve the original sentence order and meaning.
-- Do NOT merge or reorder sentences.
-- You MAY split a sentence ONLY if it exceeds 80 Korean characters.
-- When splitting, divide it into natural, grammatically complete sentences without changing meaning.
+- Preserve original meaning and logical order.
+- You MAY infer sentence boundaries when punctuation is missing in the transcription.
+- Do NOT merge unrelated thoughts.
+- You MAY split long (exceeding 80 Korean characters) spoken sentences into natural, grammatically complete sentences.
 
 [2. Discourse Filler Removal]
 - Remove unnecessary discourse fillers such as “그리고,” “그래서,” “그러니까,” “그런데”
