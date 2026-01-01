@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(mess
 # OpenAI client (API key should be set via env or st.secrets)
 client = OpenAI()
 
-def split_audio(file_path, chunk_length=200):
+def split_audio(file_path, chunk_length=120):
     """
     Splits an audio file into chunks of specified length.
     Returns:
