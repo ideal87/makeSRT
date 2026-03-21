@@ -1,212 +1,200 @@
 import streamlit as st
 import subprocess
 import os
-import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import tempfile
-from openai import OpenAI
+import re
+import numpy as np
+import librosa
+from scipy.signal import fftconvolve
 
-# Global constant for chunk length (in seconds)
-CHUNK_LENGTH = 120
+# ── Constants ────────────────────────────────────────────────────────────────
+SAMPLE_RATE = 16000        # Downsample everything to 16 kHz mono
+CLIP_DURATION = 10.0       # Use first N seconds of uploaded audio as template
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-# OpenAI client (API key should be set via env or st.secrets)
-client = OpenAI()
+def sanitize_youtube_url(url: str) -> str:
+    """Extract and return a clean YouTube URL (watch or youtu.be)."""
+    url = url.strip()
+    match = re.search(r"(https?://(?:www\.)?youtube\.com/watch\?v=[\w-]+)", url)
+    if match:
+        return match.group(1)
+    match = re.search(r"(https?://youtu\.be/[\w-]+)", url)
+    if match:
+        return match.group(1)
+    return url
 
-def split_audio(file_path, chunk_length=120):
-    """
-    Splits an audio file into chunks of specified length.
-    Returns:
-        List of tuples: (chunk_index, chunk_filename)
-    """
-    global CHUNK_LENGTH
-    CHUNK_LENGTH = chunk_length
 
-    chunks = []
-    base_name = os.path.splitext(file_path)[0]
-    output_pattern = f"{base_name}_chunk_%03d.mp3"
+def extract_video_id(url: str) -> str | None:
+    """Pull the video ID out of a YouTube URL for building timestamped links."""
+    m = re.search(r"(?:v=|youtu\.be/)([\w-]+)", url)
+    return m.group(1) if m else None
 
-    command = [
-        "ffmpeg",
-        "-i", file_path,
-        "-f", "segment",
-        "-segment_time", str(chunk_length),
-        "-c", "copy",
-        output_pattern,
+
+def download_youtube_audio(url: str, output_path: str) -> None:
+    """Download only audio from a YouTube URL as a 16 kHz mono WAV."""
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "-x",                          # extract audio
+        "--audio-format", "wav",
+        "--postprocessor-args",
+        f"ffmpeg:-ar {SAMPLE_RATE} -ac 1",   # resample on the fly
+        "-o", output_path,
+        url,
     ]
-    subprocess.run(command, check=True)
-
-    index = 0
-    while True:
-        chunk_file = f"{base_name}_chunk_{index:03d}.mp3"
-        if os.path.exists(chunk_file):
-            chunks.append((index, chunk_file))
-            index += 1
-        else:
-            break
-
-    return chunks
-
-
-def transcribe_audio(file_path):
-    with open(file_path, "rb") as audio_file:
-        response = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            language="ko",
-            response_format="text",
-            prompt="""
-            VVGA, 시편, 포도나무교회, 새물결선교회, 영적리더쉽, 비전트립, 임재, 오이코스, 예향교회,
-            성도, 언약, 1부예배, 십자가복음학교, 헌금, 남전도회, 행함, 여전도회, 긍휼, 전도사,
-            일의소명, 찬양과, 선교센터, 이길수, 두드림투게더, 선교사, 복음, 다윗, 다윗의,
-            복음주의, 새물결대학, 새물결, 마다가스카르, 초대교회, 2부예배, 성경구절, 권세,
-            기독학교, 여호와, 도전오십가정, 신약, 시게타, 십자가복음, 남녀전도회, 야고보,
-            은혜, 새물결, 두드림, 투게더
-            """
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"yt-dlp failed (code {result.returncode}):\n{result.stderr}"
         )
-    return response
 
 
-def process_text_with_gpt(transcribed_text):
+def load_clip(file_path: str, duration: float = CLIP_DURATION) -> np.ndarray:
+    """Load the first `duration` seconds of an audio file as a 16 kHz mono array."""
+    y, _ = librosa.load(file_path, sr=SAMPLE_RATE, mono=True, duration=duration)
+    return y
+
+
+def load_full_audio(file_path: str) -> np.ndarray:
+    """Load an entire audio file as a 16 kHz mono array."""
+    y, _ = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
+    return y
+
+
+def find_offset(full_audio: np.ndarray, clip: np.ndarray):
     """
-    Post-process transcription using GPT-5.2
+    Use normalised cross-correlation to find where `clip` starts in
+    `full_audio`.
+
+    Returns (offset_seconds, confidence) where confidence ∈ [0, 1].
     """
-    prompt = (
-        """
-Role:
-You are a Korean Baptist sermon transcription editor.
+    # Normalise both signals
+    full_audio = full_audio / (np.max(np.abs(full_audio)) + 1e-9)
+    clip = clip / (np.max(np.abs(clip)) + 1e-9)
 
-Task:
-Refine and correct the following Korean Christian sermon transcription generated from audio.
+    # Cross-correlate using FFT (fast even for long signals)
+    correlation = fftconvolve(full_audio, clip[::-1], mode="full")
 
-CORE RULES — FOLLOW EXACTLY:
+    # The peak in the correlation gives the best-match position
+    peak_index = np.argmax(np.abs(correlation))
 
-[1. Sentence Integrity & Length Control]
-- Preserve original meaning and logical order.
-- You MAY infer sentence boundaries when punctuation is missing in the transcription.
-- Do NOT merge unrelated thoughts.
-- You MAY split long (exceeding 80 Korean characters) spoken sentences into natural, grammatically complete sentences.
+    # Convert index → offset in the original full_audio
+    offset_samples = peak_index - (len(clip) - 1)
+    offset_seconds = offset_samples / SAMPLE_RATE
 
-[2. Discourse Filler Removal]
-- Remove unnecessary discourse fillers such as “그리고,” “그래서,” “그러니까,” “그런데”
-  ONLY when they are stylistically redundant.
-- Do NOT remove fillers when they provide rhetorical emphasis or are necessary for meaning.
+    # Confidence: peak value normalised by the energy of both signals
+    energy = np.sqrt(np.sum(clip ** 2) * np.sum(full_audio ** 2))
+    confidence = np.abs(correlation[peak_index]) / (energy + 1e-9)
 
-[3. Spoken vs. Written Tone]
-- Speaker’s own sermon delivery: use natural spoken Korean polite style.
-- Written or read content (books, Scripture, documents): preserve formal written, reading-style tone.
-- Clearly distinguish spoken tone from written tone.
-
-[4. Quotation Handling]
-- Use double quotation marks (" ") for all written or read quotations.
-- Do NOT convert paraphrases or explanations into quotations.
-- Do NOT rewrite written quotations into conversational style.
-
-[Output]
-- Remove all line breaks.
-- Output a single continuous line of text.
-
-"""
-        + transcribed_text
-    )
-
-    response = client.chat.completions.create(
-        model="o4-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return response.choices[0].message.content.strip()
+    return max(0.0, offset_seconds), confidence
 
 
-def process_chunk(chunk_info):
-    """
-    Processes a single audio chunk:
-    1) Transcribe with whisper-1
-    2) Post-process with o4-mini
-    """
-    index, chunk = chunk_info
+def seconds_to_hms(seconds: float) -> str:
+    """Convert seconds to HH:MM:SS string."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ── Streamlit UI ─────────────────────────────────────────────────────────────
+
+st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
+
+st.title("🎯 Audio Timestamp Finder")
+st.markdown(
+    "Upload a sermon audio clip and paste the YouTube URL of the full worship "
+    "service. The app will find the exact timestamp where your clip begins."
+)
+
+st.divider()
+
+# Inputs
+uploaded_file = st.file_uploader(
+    "Upload audio clip (MP3 or WAV)",
+    type=["mp3", "wav"],
+    help="The first ~10 seconds will be used as the search template.",
+)
+
+youtube_url = st.text_input(
+    "YouTube URL of the full worship service",
+    placeholder="https://www.youtube.com/watch?v=...",
+)
+
+find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=True)
+
+# ── Processing ───────────────────────────────────────────────────────────────
+
+if find_btn:
+    # -- Validate inputs --
+    if uploaded_file is None:
+        st.error("Please upload an audio file first.")
+        st.stop()
+    if not youtube_url.strip():
+        st.error("Please enter a YouTube URL.")
+        st.stop()
+
+    clean_url = sanitize_youtube_url(youtube_url)
+    video_id = extract_video_id(clean_url)
+    if not video_id:
+        st.error("Could not parse a valid YouTube video ID from the URL.")
+        st.stop()
+
+    # -- Save uploaded file to temp --
+    suffix = os.path.splitext(uploaded_file.name)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(uploaded_file.read())
+        clip_path = tmp.name
+
+    yt_audio_path = os.path.join(tempfile.gettempdir(), f"yt_{video_id}.wav")
+
     try:
-        logging.info(f"Processing chunk {index}: {chunk}")
+        # Step 1: Download YouTube audio
+        status = st.status("Working…", expanded=True)
+        status.write("⬇️  Downloading audio from YouTube…")
 
-        transcribed_text = transcribe_audio(chunk)
-        logging.info(f"Transcription for chunk {index} completed.")
+        download_youtube_audio(clean_url, yt_audio_path)
+        status.write("✅  YouTube audio downloaded.")
 
-        processed_text = process_text_with_gpt(transcribed_text)
-        logging.info(f"GPT post-processing for chunk {index} completed.")
+        # Step 2: Load audio signals
+        status.write("🎵  Loading audio signals…")
+        clip = load_clip(clip_path, duration=CLIP_DURATION)
+        full_audio = load_full_audio(yt_audio_path)
+        status.write(
+            f"✅  Loaded clip ({len(clip)/SAMPLE_RATE:.1f}s) and full audio "
+            f"({len(full_audio)/SAMPLE_RATE:.1f}s)."
+        )
 
-        os.remove(chunk)
-        logging.info(f"Deleted chunk file: {chunk}")
+        # Step 3: Cross-correlation matching
+        status.write("🔍  Matching audio fingerprint…")
+        offset_sec, confidence = find_offset(full_audio, clip)
+        status.write("✅  Match found!")
+        status.update(label="Done!", state="complete")
 
-        return index, processed_text
+        # -- Display results --
+        st.divider()
+        st.subheader("Result")
+
+        col1, col2 = st.columns(2)
+        col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec))
+        col2.metric("📊 Confidence", f"{confidence:.2%}")
+
+        yt_link = f"https://www.youtube.com/watch?v={video_id}&t={int(offset_sec)}s"
+        st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+
+        if confidence < 0.15:
+            st.warning(
+                "The confidence score is low. The match may not be accurate. "
+                "Try uploading a longer or cleaner audio clip."
+            )
 
     except Exception as e:
-        logging.error(f"Error processing chunk {index}: {e}")
-        return index, ""
+        st.error(f"An error occurred: {e}")
 
-
-def process_audio(file_path):
-    chunks = split_audio(file_path)
-    all_processed_text = []
-
-    max_workers = min(8, len(chunks))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(process_chunk, chunk): chunk[0]
-            for chunk in chunks
-        }
-
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                chunk_index, text = future.result()
-                all_processed_text.append((chunk_index, text))
-                logging.info(f"Chunk {chunk_index} processed successfully.")
-            except Exception as exc:
-                logging.error(f"Chunk {idx} failed: {exc}")
-
-    all_processed_text.sort(key=lambda x: x[0])
-    return [text for _, text in all_processed_text]
-
-
-# --- Streamlit App ---
-
-st.title("MP3 to Text Transcription & Revision")
-st.write("Upload an MP3 file to generate a revised text transcription.")
-
-uploaded_file = st.file_uploader("Choose an MP3 file", type=["mp3"])
-
-if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        tmp_file_path = tmp_file.name
-
-    base_name = os.path.splitext(uploaded_file.name)[0]
-    output_file_name = f"{base_name}_processed.txt"
-
-    if st.button("Process Audio"):
-        with st.spinner("Processing audio, please wait..."):
-            try:
-                processed_texts = process_audio(tmp_file_path)
-
-                final_text = ""
-                for text in processed_texts:
-                    final_text += text + "\n\n"
-
-                st.success("Processing complete!")
-                st.download_button(
-                    label="Download Text File",
-                    data=final_text,
-                    file_name=output_file_name,
-                    mime="text/plain",
-                )
-
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
-
-            finally:
-                if os.path.exists(tmp_file_path):
-                    os.remove(tmp_file_path)
-else:
-    st.info("Awaiting MP3 file upload.")
+    finally:
+        # Clean up temp files
+        if os.path.exists(clip_path):
+            os.remove(clip_path)
+        if os.path.exists(yt_audio_path):
+            os.remove(yt_audio_path)
