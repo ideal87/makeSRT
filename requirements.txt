@@ -1,3 +1,5 @@
 streamlit
-openai
-ffmpeg-python
+yt-dlp
+librosa
+numpy
+scipy
