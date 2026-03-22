@@ -6,10 +6,12 @@ import re
 import numpy as np
 import librosa
 from scipy.signal import fftconvolve
+import time
 
 # ── Constants ────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000        # Downsample everything to 16 kHz mono
-CLIP_DURATION = 10.0       # Use first N seconds of uploaded audio as template
+CLIP_DURATION = 30.0       # Use first N seconds of uploaded audio as template
+SEARCH_WINDOW = 1800       # 30-minute search window in seconds
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +34,7 @@ def extract_video_id(url: str) -> str | None:
 
 
 def download_youtube_audio(url: str, output_path: str) -> None:
-    """Download only audio from a YouTube URL as a 16 kHz mono WAV."""
+    """Download full audio from a YouTube URL as a 16 kHz mono WAV."""
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -41,8 +43,8 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         "--postprocessor-args",
         f"ffmpeg:-ar {SAMPLE_RATE} -ac 1",   # resample on the fly
         "-o", output_path,
-        url,
     ]
+    cmd.append(url)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
@@ -90,12 +92,25 @@ def find_offset(full_audio: np.ndarray, clip: np.ndarray):
     return max(0.0, offset_seconds), confidence
 
 
-def seconds_to_hms(seconds: float) -> str:
-    """Convert seconds to HH:MM:SS string."""
+def seconds_to_hms(seconds: float, ms: bool = False) -> str:
+    """Convert seconds to HH:MM:SS (or HH:MM:SS.mmm) string."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    s = seconds % 60
+    if ms:
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+    return f"{h:02d}:{m:02d}:{int(s):02d}"
+
+
+def hms_to_seconds(hms: str) -> float:
+    """Convert HH:MM:SS or MM:SS string to seconds."""
+    parts = hms.strip().split(":")
+    parts = [float(p) for p in parts]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    return parts[0]
 
 
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
@@ -114,12 +129,20 @@ st.divider()
 uploaded_file = st.file_uploader(
     "Upload audio clip (MP3 or WAV)",
     type=["mp3", "wav"],
-    help="The first ~10 seconds will be used as the search template.",
+    help="The first ~30 seconds will be used as the search template.",
 )
 
 youtube_url = st.text_input(
     "YouTube URL of the full worship service",
     placeholder="https://www.youtube.com/watch?v=...",
+)
+
+window_start = st.text_input(
+    "Search window start time (HH:MM:SS)",
+    value="03:40:00",
+    help="The app will search a 30-minute window starting at this time. "
+         "Change this and click Find again to search a different range "
+         "(the audio won't be re-downloaded).",
 )
 
 find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=True)
@@ -141,60 +164,117 @@ if find_btn:
         st.error("Could not parse a valid YouTube video ID from the URL.")
         st.stop()
 
-    # -- Save uploaded file to temp --
-    suffix = os.path.splitext(uploaded_file.name)[1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(uploaded_file.read())
-        clip_path = tmp.name
+    window_start_sec = hms_to_seconds(window_start)
+    window_end_sec = window_start_sec + SEARCH_WINDOW
 
-    yt_audio_path = os.path.join(tempfile.gettempdir(), f"yt_{video_id}.wav")
+    status = st.status("Working…", expanded=True)
 
     try:
-        # Step 1: Download YouTube audio
-        status = st.status("Working…", expanded=True)
-        status.write("⬇️  Downloading audio from YouTube…")
+        t0 = time.time()
 
-        download_youtube_audio(clean_url, yt_audio_path)
-        status.write("✅  YouTube audio downloaded.")
+        def elapsed() -> str:
+            return f"[{time.time() - t0:.1f}s]"
 
-        # Step 2: Load audio signals
-        status.write("🎵  Loading audio signals…")
+        # ── Step 1: Download & cache full YouTube audio ──────────────────
+        cached = st.session_state.get("cached_video_id")
+
+        if cached == video_id and "full_audio" in st.session_state:
+            status.write(f"{elapsed()}  ✅  Using previously downloaded audio (skipping download).")
+            full_audio = st.session_state["full_audio"]
+        else:
+            status.write(f"{elapsed()}  ⬇️  Downloading full audio from YouTube…")
+            yt_audio_path = os.path.join(
+                tempfile.gettempdir(), f"yt_{video_id}.wav"
+            )
+            download_youtube_audio(clean_url, yt_audio_path)
+            status.write(f"{elapsed()}  ✅  YouTube audio downloaded.")
+
+            status.write(f"{elapsed()}  🎵  Loading full audio into memory…")
+            full_audio = load_full_audio(yt_audio_path)
+            st.session_state["full_audio"] = full_audio
+            st.session_state["cached_video_id"] = video_id
+            status.write(
+                f"{elapsed()}  ✅  Full audio loaded ({len(full_audio)/SAMPLE_RATE:.1f}s)."
+            )
+
+            # Clean up the WAV file on disk (we keep the array in memory)
+            if os.path.exists(yt_audio_path):
+                os.remove(yt_audio_path)
+
+        # ── Step 2: Load the uploaded clip ───────────────────────────────
+        suffix = os.path.splitext(uploaded_file.name)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            clip_path = tmp.name
+
+        status.write(f"{elapsed()}  🎵  Loading audio clip…")
         clip = load_clip(clip_path, duration=CLIP_DURATION)
-        full_audio = load_full_audio(yt_audio_path)
+        os.remove(clip_path)
+        status.write(f"{elapsed()}  ✅  Clip loaded ({len(clip)/SAMPLE_RATE:.1f}s).")
+
+        # ── Step 3: Slice to search window & match ───────────────────────
+        total_duration = len(full_audio) / SAMPLE_RATE
+
+        start_sample = int(window_start_sec * SAMPLE_RATE)
+        end_sample = int(window_end_sec * SAMPLE_RATE)
+
+        # Clamp to actual audio length
+        start_sample = max(0, min(start_sample, len(full_audio)))
+        end_sample = max(start_sample, min(end_sample, len(full_audio)))
+
+        window_audio = full_audio[start_sample:end_sample]
+
+        if len(window_audio) == 0:
+            status.update(label="Done — bad range", state="error")
+            st.error(
+                f"The search window ({seconds_to_hms(window_start_sec)} → "
+                f"{seconds_to_hms(window_end_sec)}) is outside the audio "
+                f"(total length {seconds_to_hms(total_duration)}). "
+                "Please adjust the start time."
+            )
+            st.stop()
+
         status.write(
-            f"✅  Loaded clip ({len(clip)/SAMPLE_RATE:.1f}s) and full audio "
-            f"({len(full_audio)/SAMPLE_RATE:.1f}s)."
+            f"{elapsed()}  🔍  Searching in window "
+            f"{seconds_to_hms(window_start_sec)} → "
+            f"{seconds_to_hms(min(window_end_sec, total_duration))} "
+            f"({len(window_audio)/SAMPLE_RATE:.1f}s)…"
         )
 
-        # Step 3: Cross-correlation matching
-        status.write("🔍  Matching audio fingerprint…")
-        offset_sec, confidence = find_offset(full_audio, clip)
-        status.write("✅  Match found!")
-        status.update(label="Done!", state="complete")
+        offset_in_window, confidence = find_offset(window_audio, clip)
+
+        # Adjust offset to be relative to the full video
+        offset_sec = offset_in_window + window_start_sec
 
         # -- Display results --
         st.divider()
-        st.subheader("Result")
 
-        col1, col2 = st.columns(2)
-        col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec))
-        col2.metric("📊 Confidence", f"{confidence:.2%}")
-
-        yt_link = f"https://www.youtube.com/watch?v={video_id}&t={int(offset_sec)}s"
-        st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
-
-        if confidence < 0.15:
-            st.warning(
-                "The confidence score is low. The match may not be accurate. "
-                "Try uploading a longer or cleaner audio clip."
+        if confidence < 0.01:
+            status.write(f"{elapsed()}  ❌  No match found.")
+            status.update(label=f"Done — no match ({elapsed()})", state="error")
+            st.subheader("Result")
+            st.error(
+                "No matching audio found in the search window. "
+                "Try adjusting the start time and clicking **Find Timestamp** "
+                "again (the audio won't be re-downloaded)."
             )
+        else:
+            status.write(f"{elapsed()}  ✅  Match found!")
+            status.update(label=f"Done! ({elapsed()})", state="complete")
+            st.subheader("Result")
+
+            col1, col2 = st.columns(2)
+            col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec, ms=True))
+            col2.metric("📊 Confidence", f"{confidence:.2%}")
+
+            yt_link = f"https://www.youtube.com/watch?v={video_id}&t={int(offset_sec)}s"
+            st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+
+            if confidence < 0.15:
+                st.warning(
+                    "The confidence score is low. The match may not be accurate. "
+                    "Try uploading a longer or cleaner audio clip."
+                )
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
-
-    finally:
-        # Clean up temp files
-        if os.path.exists(clip_path):
-            os.remove(clip_path)
-        if os.path.exists(yt_audio_path):
-            os.remove(yt_audio_path)
