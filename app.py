@@ -119,27 +119,53 @@ st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
 
 st.title("🎯 Audio Timestamp Finder")
 st.markdown(
-    "Upload a sermon audio clip and paste the YouTube URL of the full worship "
-    "service. The app will find the exact timestamp where your clip begins."
+    "Select your sources for the **Short Clip** and the **Full Audio**, then click find! "
+    "The app will locate the exact timestamp where the short clip begins within the full audio."
 )
 
 st.divider()
 
-# Inputs
-uploaded_file = st.file_uploader(
-    "Upload audio clip (MP3 or WAV)",
-    type=["mp3", "wav"],
-    help="The first ~30 seconds will be used as the search template.",
-)
+col1, col2 = st.columns(2)
 
-youtube_url = st.text_input(
-    "YouTube URL of the full worship service",
-    placeholder="https://www.youtube.com/watch?v=...",
-)
+with col1:
+    st.subheader("1. Short Clip (Search Template)")
+    clip_src = st.radio("Source", ["Local File", "YouTube URL"], key="clip_src", label_visibility="collapsed")
+    if clip_src == "Local File":
+        clip_input = st.file_uploader(
+            "Upload audio clip (MP3 or WAV)",
+            type=["mp3", "wav"],
+            help="The first ~30 seconds will be used as the search template.",
+            key="clip_uploader"
+        )
+    else:
+        clip_input = st.text_input(
+            "YouTube URL of short clip",
+            placeholder="https://www.youtube.com/watch?v=...",
+            help="The first ~30 seconds of this video will be used as the search template.",
+            key="clip_url"
+        )
+
+with col2:
+    st.subheader("2. Full Audio (Search Target)")
+    full_src = st.radio("Source", ["YouTube URL", "Local File"], key="full_src", label_visibility="collapsed")
+    if full_src == "YouTube URL":
+        full_input = st.text_input(
+            "YouTube URL of full audio",
+            placeholder="https://www.youtube.com/watch?v=...",
+            key="full_url"
+        )
+    else:
+        full_input = st.file_uploader(
+            "Upload full audio file (MP3/WAV)",
+            type=["mp3", "wav"],
+            key="full_uploader"
+        )
+
+st.divider()
 
 window_start = st.text_input(
     "Search window start time (HH:MM:SS)",
-    value="03:40:00",
+    value="00:00:00",
     help="The app will search a 30-minute window starting at this time. "
          "Change this and click Find again to search a different range "
          "(the audio won't be re-downloaded).",
@@ -151,20 +177,34 @@ find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=
 
 if find_btn:
     # -- Validate inputs --
-    if uploaded_file is None:
-        st.error("Please upload an audio file first.")
+    if not clip_input:
+        st.error("Please provide a short clip source.")
         st.stop()
-    if not youtube_url.strip():
-        st.error("Please enter a YouTube URL.")
-        st.stop()
-
-    clean_url = sanitize_youtube_url(youtube_url)
-    video_id = extract_video_id(clean_url)
-    if not video_id:
-        st.error("Could not parse a valid YouTube video ID from the URL.")
+    if not full_input:
+        st.error("Please provide a full audio source.")
         st.stop()
 
-    window_start_sec = hms_to_seconds(window_start)
+    clip_url = None
+    full_url = None
+
+    if clip_src == "YouTube URL":
+        clip_url = sanitize_youtube_url(clip_input)
+        if not extract_video_id(clip_url):
+            st.error("Invalid YouTube URL for Short Clip.")
+            st.stop()
+    
+    if full_src == "YouTube URL":
+        full_url = sanitize_youtube_url(full_input)
+        if not extract_video_id(full_url):
+            st.error("Invalid YouTube URL for Full Audio.")
+            st.stop()
+
+    try:
+        window_start_sec = hms_to_seconds(window_start)
+    except Exception:
+        st.error("Invalid time format for Search Window Start. Use HH:MM:SS.")
+        st.stop()
+        
     window_end_sec = window_start_sec + SEARCH_WINDOW
 
     status = st.status("Working…", expanded=True)
@@ -175,41 +215,80 @@ if find_btn:
         def elapsed() -> str:
             return f"[{time.time() - t0:.1f}s]"
 
-        # ── Step 1: Download & cache full YouTube audio ──────────────────
-        cached = st.session_state.get("cached_video_id")
-
-        if cached == video_id and "full_audio" in st.session_state:
-            status.write(f"{elapsed()}  ✅  Using previously downloaded audio (skipping download).")
-            full_audio = st.session_state["full_audio"]
+        # ── Step 1: Load Full Audio ─────────────────────────────────────────
+        if full_src == "YouTube URL":
+            assert full_url is not None
+            video_id = extract_video_id(full_url)
+            cached = st.session_state.get("cached_full_id")
+            if cached == video_id and "full_audio" in st.session_state:
+                status.write(f"{elapsed()}  ✅  Using cached full YouTube audio.")
+                full_audio = st.session_state["full_audio"]
+            else:
+                status.write(f"{elapsed()}  ⬇️  Downloading full audio from YouTube…")
+                yt_audio_path = os.path.join(tempfile.gettempdir(), f"yt_full_{video_id}.wav")
+                assert full_url is not None
+                download_youtube_audio(full_url, yt_audio_path)
+                status.write(f"{elapsed()}  🎵  Loading full audio into memory…")
+                full_audio = load_full_audio(yt_audio_path)
+                st.session_state["full_audio"] = full_audio
+                st.session_state["cached_full_id"] = video_id
+                if os.path.exists(yt_audio_path):
+                    os.remove(yt_audio_path)
+                status.write(f"{elapsed()}  ✅  Full audio loaded ({len(full_audio)/SAMPLE_RATE:.1f}s).")
         else:
-            status.write(f"{elapsed()}  ⬇️  Downloading full audio from YouTube…")
-            yt_audio_path = os.path.join(
-                tempfile.gettempdir(), f"yt_{video_id}.wav"
-            )
-            download_youtube_audio(clean_url, yt_audio_path)
-            status.write(f"{elapsed()}  ✅  YouTube audio downloaded.")
+            file_id = f"full_{full_input.name}_{full_input.size}"
+            if st.session_state.get("cached_full_id") == file_id and "full_audio" in st.session_state:
+                status.write(f"{elapsed()}  ✅  Using cached full local audio.")
+                full_audio = st.session_state["full_audio"]
+            else:
+                status.write(f"{elapsed()}  🎵  Loading full local audio into memory…")
+                suffix = os.path.splitext(full_input.name)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(full_input.read())
+                    full_path = tmp.name
+                
+                full_audio = load_full_audio(full_path)
+                os.remove(full_path)
+                st.session_state["full_audio"] = full_audio
+                st.session_state["cached_full_id"] = file_id
+                status.write(f"{elapsed()}  ✅  Full audio loaded ({len(full_audio)/SAMPLE_RATE:.1f}s).")
 
-            status.write(f"{elapsed()}  🎵  Loading full audio into memory…")
-            full_audio = load_full_audio(yt_audio_path)
-            st.session_state["full_audio"] = full_audio
-            st.session_state["cached_video_id"] = video_id
-            status.write(
-                f"{elapsed()}  ✅  Full audio loaded ({len(full_audio)/SAMPLE_RATE:.1f}s)."
-            )
+        # ── Step 2: Load the Short Clip ──────────────────────────────────────
+        if clip_src == "YouTube URL":
+            assert clip_url is not None
+            video_id = extract_video_id(clip_url)
+            cached = st.session_state.get("cached_clip_id")
+            if cached == video_id and "clip_audio" in st.session_state:
+                status.write(f"{elapsed()}  ✅  Using cached short clip audio.")
+                clip = st.session_state["clip_audio"]
+            else:
+                status.write(f"{elapsed()}  ⬇️  Downloading short clip from YouTube…")
+                yt_clip_path = os.path.join(tempfile.gettempdir(), f"yt_clip_{video_id}.wav")
+                assert clip_url is not None
+                download_youtube_audio(clip_url, yt_clip_path)
+                status.write(f"{elapsed()}  🎵  Loading clip audio into memory (first {CLIP_DURATION}s)…")
+                clip = load_clip(yt_clip_path, duration=CLIP_DURATION)
+                if os.path.exists(yt_clip_path):
+                    os.remove(yt_clip_path)
+                st.session_state["clip_audio"] = clip
+                st.session_state["cached_clip_id"] = video_id
+        else:
+            file_id = f"clip_{clip_input.name}_{clip_input.size}"
+            if st.session_state.get("cached_clip_id") == file_id and "clip_audio" in st.session_state:
+                status.write(f"{elapsed()}  ✅  Using cached short local clip.")
+                clip = st.session_state["clip_audio"]
+            else:
+                suffix = os.path.splitext(clip_input.name)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(clip_input.read())
+                    clip_path = tmp.name
+                
+                status.write(f"{elapsed()}  🎵  Loading clip audio into memory (first {CLIP_DURATION}s)…")
+                clip = load_clip(clip_path, duration=CLIP_DURATION)
+                os.remove(clip_path)
+                st.session_state["clip_audio"] = clip
+                st.session_state["cached_clip_id"] = file_id
 
-            # Clean up the WAV file on disk (we keep the array in memory)
-            if os.path.exists(yt_audio_path):
-                os.remove(yt_audio_path)
-
-        # ── Step 2: Load the uploaded clip ───────────────────────────────
-        suffix = os.path.splitext(uploaded_file.name)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(uploaded_file.read())
-            clip_path = tmp.name
-
-        status.write(f"{elapsed()}  🎵  Loading audio clip…")
-        clip = load_clip(clip_path, duration=CLIP_DURATION)
-        os.remove(clip_path)
         status.write(f"{elapsed()}  ✅  Clip loaded ({len(clip)/SAMPLE_RATE:.1f}s).")
 
         # ── Step 3: Slice to search window & match ───────────────────────
@@ -267,14 +346,21 @@ if find_btn:
             col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec, ms=True))
             col2.metric("📊 Confidence", f"{confidence:.2%}")
 
-            yt_link = f"https://www.youtube.com/watch?v={video_id}&t={int(offset_sec)}s"
-            st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+            if full_src == "YouTube URL":
+                assert full_url is not None
+                full_video_id = extract_video_id(full_url)
+                yt_link = f"https://www.youtube.com/watch?v={full_video_id}&t={int(offset_sec)}s"
+                st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+            else:
+                st.info("Since the full audio is a local file, navigate to this timestamp in your local media player.")
 
             if confidence < 0.15:
                 st.warning(
                     "The confidence score is low. The match may not be accurate. "
-                    "Try uploading a longer or cleaner audio clip."
+                    "Try using a longer or cleaner audio clip."
                 )
 
     except Exception as e:
+        status.update(label="Error occurred", state="error")
         st.error(f"An error occurred: {e}")
+
