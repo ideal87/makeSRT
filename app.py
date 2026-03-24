@@ -1,5 +1,6 @@
 import streamlit as st
 import subprocess
+import sys
 import os
 import tempfile
 import re
@@ -15,28 +16,25 @@ SEARCH_WINDOW = 1800       # 30-minute search window in seconds
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def sanitize_youtube_url(url: str) -> str:
-    """Extract and return a clean YouTube URL (watch or youtu.be)."""
-    url = url.strip()
-    match = re.search(r"(https?://(?:www\.)?youtube\.com/watch\?v=[\w-]+)", url)
-    if match:
-        return match.group(1)
-    match = re.search(r"(https?://youtu\.be/[\w-]+)", url)
-    if match:
-        return match.group(1)
-    return url
-
-
 def extract_video_id(url: str) -> str | None:
     """Pull the video ID out of a YouTube URL for building timestamped links."""
-    m = re.search(r"(?:v=|youtu\.be/)([\w-]+)", url)
+    m = re.search(r"(?:v=|youtu\.be/|/live/|/shorts/)([\w-]+)", url)
     return m.group(1) if m else None
+
+
+def sanitize_youtube_url(url: str) -> str:
+    """Extract and return a clean YouTube watch URL."""
+    url = url.strip()
+    video_id = extract_video_id(url)
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
 
 
 def download_youtube_audio(url: str, output_path: str) -> None:
     """Download full audio from a YouTube URL as a 16 kHz mono WAV."""
     cmd = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",
         "--no-playlist",
         "-x",                          # extract audio
         "--audio-format", "wav",
@@ -50,6 +48,27 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         raise RuntimeError(
             f"yt-dlp failed (code {result.returncode}):\n{result.stderr}"
         )
+
+
+def check_youtube_url(url: str) -> tuple[bool, str]:
+    """Check if a YouTube URL is valid and accessible using yt-dlp."""
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--simulate",
+        "--print", "title",
+        "--no-playlist",
+        url
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    if result.returncode == 0:
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        title = lines[-1] if lines else "Unknown Title"
+        return True, title
+    else:
+        err = result.stderr.strip()
+        m = re.search(r"ERROR:\s*(.*)", err)
+        error_msg = m.group(1) if m else "Unknown error occurred"
+        return False, error_msg
 
 
 def load_clip(file_path: str, duration: float = CLIP_DURATION) -> np.ndarray:
@@ -113,6 +132,51 @@ def hms_to_seconds(hms: str) -> float:
     return parts[0]
 
 
+def shift_srt_content(srt_content: str, shift_seconds: float) -> str:
+    """Shift all timestamps in an SRT string backwards by shift_seconds."""
+    import re
+    time_pattern = re.compile(r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})")
+    
+    def shift_time(t_str: str, offset: float) -> str | None:
+        h, m, s, ms = int(t_str[0:2]), int(t_str[3:5]), int(t_str[6:8]), int(t_str[9:12])
+        sec = h * 3600 + m * 60 + s + ms / 1000.0 - offset
+        if sec < 0: return None
+        return f"{int(sec//3600):02d}:{int((sec%3600)//60):02d}:{int(sec%60):02d},{int(round((sec%1)*1000)):03d}"
+
+    blocks = re.split(r'\n\s*\n', srt_content.strip())
+    out_lines = []
+    counter = 1
+    
+    for block in blocks:
+        block_lines = block.split('\n')
+        if not block_lines: continue
+        
+        time_line_idx = -1
+        for i, line in enumerate(block_lines):
+            if '-->' in line:
+                time_line_idx = i
+                break
+                
+        if time_line_idx != -1:
+            match = time_pattern.search(block_lines[time_line_idx])
+            if match:
+                start_str, end_str = match.group(1), match.group(2)
+                new_start = shift_time(start_str, shift_seconds)
+                new_end = shift_time(end_str, shift_seconds)
+                
+                if new_end is None:
+                    continue
+                if new_start is None:
+                    new_start = "00:00:00,000"
+                
+                new_time_line = block_lines[time_line_idx].replace(start_str, new_start).replace(end_str, new_end)
+                new_block = [str(counter), new_time_line] + block_lines[time_line_idx+1:]
+                out_lines.append('\n'.join(new_block))
+                counter += 1
+                
+    return '\n\n'.join(out_lines) + '\n'
+
+
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
@@ -144,6 +208,20 @@ with col1:
             help="The first ~30 seconds of this video will be used as the search template.",
             key="clip_url"
         )
+        if st.button("Validate Clip URL"):
+            if not clip_input:
+                st.warning("Please enter a URL first.")
+            else:
+                clean_url = sanitize_youtube_url(clip_input)
+                if not extract_video_id(clean_url):
+                    st.error("Invalid YouTube URL format.")
+                else:
+                    with st.spinner("Validating..."):
+                        is_valid, msg = check_youtube_url(clean_url)
+                    if is_valid:
+                        st.success(f"✅ Valid! Title: {msg}")
+                    else:
+                        st.error(f"❌ Cannot access video: {msg}")
 
 with col2:
     st.subheader("2. Full Audio (Search Target)")
@@ -154,6 +232,20 @@ with col2:
             placeholder="https://www.youtube.com/watch?v=...",
             key="full_url"
         )
+        if st.button("Validate Full Audio URL"):
+            if not full_input:
+                st.warning("Please enter a URL first.")
+            else:
+                clean_url = sanitize_youtube_url(full_input)
+                if not extract_video_id(clean_url):
+                    st.error("Invalid YouTube URL format.")
+                else:
+                    with st.spinner("Validating..."):
+                        is_valid, msg = check_youtube_url(clean_url)
+                    if is_valid:
+                        st.success(f"✅ Valid! Title: {msg}")
+                    else:
+                        st.error(f"❌ Cannot access video: {msg}")
     else:
         full_input = st.file_uploader(
             "Upload full audio file (MP3/WAV)",
@@ -171,7 +263,15 @@ window_start = st.text_input(
          "(the audio won't be re-downloaded).",
 )
 
-find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=True)
+col_find, col_stop = st.columns(2)
+with col_find:
+    find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=True)
+with col_stop:
+    stop_btn = st.button("🛑 Stop Processing", use_container_width=True)
+
+if stop_btn:
+    st.warning("Process was manually stopped.")
+    st.stop()
 
 # ── Processing ───────────────────────────────────────────────────────────────
 
@@ -353,6 +453,12 @@ if find_btn:
                 st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
             else:
                 st.info("Since the full audio is a local file, navigate to this timestamp in your local media player.")
+                
+            st.session_state["match_result"] = {
+                "offset_sec": offset_sec,
+                "clip_src": clip_src,
+                "full_src": full_src,
+            }
 
             if confidence < 0.15:
                 st.warning(
@@ -363,4 +469,36 @@ if find_btn:
     except Exception as e:
         status.update(label="Error occurred", state="error")
         st.error(f"An error occurred: {e}")
+
+# ── Feature: Subtitle Shifting ───────────────────────────────────────────────
+
+if "match_result" in st.session_state:
+    res = st.session_state["match_result"]
+    if res["clip_src"] == "YouTube URL" and res["full_src"] == "Local File":
+        st.divider()
+        st.subheader("Shift Subtitles (SRT)")
+        st.markdown(
+            "Upload the SRT file that corresponds to the local target audio. "
+            "This will shift all timestamps backwards by the match offset "
+            f"(**{res['offset_sec']:.3f}s**)."
+        )
+        srt_file = st.file_uploader("Upload SRT File", type=["srt"])
+        if srt_file:
+            content = srt_file.read().decode("utf-8")
+            shifted = shift_srt_content(content, res["offset_sec"])
+            
+            orig_name = srt_file.name
+            if orig_name.lower().endswith(".srt"):
+                new_name = orig_name[:-4] + "_shifted.srt"
+            else:
+                new_name = orig_name + "_shifted.srt"
+                
+            st.success("Subtitle shifted successfully!")
+            st.download_button(
+                label="📥 Download Shifted SRT",
+                data=shifted,
+                file_name=new_name,
+                mime="text/plain",
+                type="primary"
+            )
 
