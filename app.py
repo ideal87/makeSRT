@@ -70,6 +70,62 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         error_msg = m.group(1) if m else "Unknown error occurred"
         return False, error_msg
 
+def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -> str | None:
+    """
+    Search NWTVMedia for a video or stream matching the YYYYMMDD date prefix.
+    If target_type is "short_clip", searches for "YYYY-MM-DD [" in videos.
+    If target_type is "full_audio", searches for "YYYY.MM.DD" in streams (returns earliest).
+    """
+    import scrapetube
+
+    if len(date_str) != 8 or not date_str.isdigit():
+        return None
+    
+    y, m, d = date_str[0:4], date_str[4:6], date_str[6:8]
+
+    if target_type == "short_clip":
+        match_str = f"{y}-{m}-{d} ["
+        try:
+            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=10)
+            for v in videos:
+                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
+                if match_str in title:
+                    return f"https://www.youtube.com/watch?v={v['videoId']}"
+        except Exception:
+            pass
+        return None
+
+    else:
+        video_match = f"{y}-{m}-{d}"
+        stream_match = f"{y}.{m}.{d}"
+
+        matched_streams = []
+        try:
+            streams = scrapetube.get_channel(channel_username='nwtvmedia', limit=5, content_type='streams')
+            for v in streams:
+                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
+                if stream_match in title or video_match in title:
+                    matched_streams.append(f"https://www.youtube.com/watch?v={v['videoId']}")
+        except Exception:
+            pass
+
+        if matched_streams:
+            return matched_streams[-1]
+
+        matched_videos = []
+        try:
+            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=5)
+            for v in videos:
+                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
+                if video_match in title or stream_match in title:
+                    matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
+        except Exception:
+            pass
+
+        if matched_videos:
+            return matched_videos[-1]
+
+    return None
 
 def load_clip(file_path: str, duration: float = CLIP_DURATION) -> np.ndarray:
     """Load the first `duration` seconds of an audio file as a 16 kHz mono array."""
@@ -181,6 +237,15 @@ def shift_srt_content(srt_content: str, shift_seconds: float) -> str:
 
 st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
 
+if "_pending_clip_src" in st.session_state:
+    st.session_state.clip_src = st.session_state._pending_clip_src
+    st.session_state.clip_url = st.session_state._pending_clip_url
+    del st.session_state["_pending_clip_src"]
+    del st.session_state["_pending_clip_url"]
+
+if "window_start_input" not in st.session_state:
+    st.session_state["window_start_input"] = "03:30:00"
+
 st.title("🎯 Audio Timestamp Finder")
 st.markdown(
     "Select your sources for the **Short Clip** and the **Full Audio**, then click find! "
@@ -201,6 +266,23 @@ with col1:
             help="The first ~30 seconds will be used as the search template.",
             key="clip_uploader"
         )
+        if clip_input:
+            import re
+            m = re.match(r"^(\d{8})", clip_input.name)
+            if m:
+                date_prefix = m.group(1)
+                st.info(f"Detected date prefix: {date_prefix}")
+                if st.button("Fetch URL", key="fetch_url_btn"):
+                    with st.spinner("Searching YouTube for a matching date..."):
+                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
+                    if matched_url:
+                        st.success("Found a matching full audio URL!")
+                        st.session_state.full_src = "YouTube URL"
+                        st.session_state.full_url = matched_url
+                        st.session_state.window_start_input = "03:30:00"
+                        st.rerun()
+                    else:
+                        st.error("Could not find a matching video/stream on NWTVMedia.")
     else:
         clip_input = st.text_input(
             "YouTube URL of short clip",
@@ -225,7 +307,14 @@ with col1:
 
 with col2:
     st.subheader("2. Full Audio (Search Target)")
-    full_src = st.radio("Source", ["YouTube URL", "Local File"], key="full_src", label_visibility="collapsed")
+
+    def on_full_src_change():
+        if st.session_state.full_src == "YouTube URL":
+            st.session_state.window_start_input = "03:30:00"
+        else:
+            st.session_state.window_start_input = "00:10:00"
+
+    full_src = st.radio("Source", ["YouTube URL", "Local File"], key="full_src", label_visibility="collapsed", on_change=on_full_src_change)
     if full_src == "YouTube URL":
         full_input = st.text_input(
             "YouTube URL of full audio",
@@ -252,12 +341,28 @@ with col2:
             type=["mp3", "wav"],
             key="full_uploader"
         )
+        if full_input:
+            import re
+            m = re.match(r"^(\d{8})", full_input.name)
+            if m:
+                date_prefix = m.group(1)
+                st.info(f"Detected date prefix: {date_prefix}")
+                if st.button("Fetch URL", key="fetch_url_btn_full"):
+                    with st.spinner("Searching YouTube for a matching date..."):
+                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
+                    if matched_url:
+                        st.success("Found a matching short clip URL!")
+                        st.session_state._pending_clip_src = "YouTube URL"
+                        st.session_state._pending_clip_url = matched_url
+                        st.rerun()
+                    else:
+                        st.error("Could not find a matching video/stream on NWTVMedia.")
 
 st.divider()
 
 window_start = st.text_input(
     "Search window start time (HH:MM:SS)",
-    value="00:00:00",
+    key="window_start_input",
     help="The app will search a 30-minute window starting at this time. "
          "Change this and click Find again to search a different range "
          "(the audio won't be re-downloaded).",

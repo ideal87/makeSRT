@@ -3,3 +3,4 @@ yt-dlp
 librosa
 numpy
 scipy
+scrapetube
