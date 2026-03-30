@@ -36,6 +36,7 @@ def download_youtube_audio(url: str, output_path: str) -> None:
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist",
+        "--js-runtimes", "nodejs",
         "-x",                          # extract audio
         "--audio-format", "wav",
         "--postprocessor-args",
@@ -57,6 +58,7 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         "--simulate",
         "--print", "title",
         "--no-playlist",
+        "--js-runtimes", "nodejs",
         url
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
