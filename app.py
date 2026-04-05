@@ -32,15 +32,15 @@ def sanitize_youtube_url(url: str) -> str:
 
 
 def download_youtube_audio(url: str, output_path: str) -> None:
-    """Download full audio from a YouTube URL as a 16 kHz mono WAV."""
+    """Download full audio from a YouTube URL as a 16 kHz mono MP3 CBR."""
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist",
         "--js-runtimes", "nodejs",
         "-x",                          # extract audio
-        "--audio-format", "wav",
+        "--audio-format", "mp3",
         "--postprocessor-args",
-        f"ffmpeg:-ar {SAMPLE_RATE} -ac 1",   # resample on the fly
+        f"ffmpeg:-ar {SAMPLE_RATE} -ac 1 -b:a 128k",   # resample and set constant bitrate
         "-o", output_path,
     ]
     cmd.append(url)
@@ -432,7 +432,7 @@ if find_btn:
                 full_audio = st.session_state["full_audio"]
             else:
                 status.write(f"{elapsed()}  ⬇️  Downloading full audio from YouTube…")
-                yt_audio_path = os.path.join(tempfile.gettempdir(), f"yt_full_{video_id}.wav")
+                yt_audio_path = os.path.join(tempfile.gettempdir(), f"yt_full_{video_id}.mp3")
                 assert full_url is not None
                 download_youtube_audio(full_url, yt_audio_path)
                 status.write(f"{elapsed()}  🎵  Loading full audio into memory…")
@@ -470,7 +470,7 @@ if find_btn:
                 clip = st.session_state["clip_audio"]
             else:
                 status.write(f"{elapsed()}  ⬇️  Downloading short clip from YouTube…")
-                yt_clip_path = os.path.join(tempfile.gettempdir(), f"yt_clip_{video_id}.wav")
+                yt_clip_path = os.path.join(tempfile.gettempdir(), f"yt_clip_{video_id}.mp3")
                 assert clip_url is not None
                 download_youtube_audio(clip_url, yt_clip_path)
                 status.write(f"{elapsed()}  🎵  Loading clip audio into memory (first {CLIP_DURATION}s)…")
