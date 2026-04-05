@@ -246,7 +246,7 @@ if "_pending_clip_src" in st.session_state:
     del st.session_state["_pending_clip_url"]
 
 if "window_start_input" not in st.session_state:
-    st.session_state["window_start_input"] = "00:10:00"
+    st.session_state["window_start_input"] = "03:30:00"
 
 st.title("🎯 Audio Timestamp Finder")
 st.markdown(
@@ -259,14 +259,18 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-    def on_src_change():
-        if st.session_state.full_src == "YouTube URL":
+    def on_clip_change():
+        if st.session_state.clip_src == "YouTube URL":
             st.session_state.window_start_input = "00:10:00"
+
+    def on_full_change():
+        if st.session_state.full_src == "YouTube URL":
+            st.session_state.window_start_input = "03:30:00"
         else:
             st.session_state.window_start_input = "00:10:00"
 
     st.subheader("1. Short Clip (Search Template)")
-    clip_src = st.radio("Source", ["Local File", "YouTube URL"], key="clip_src", label_visibility="collapsed", on_change=on_src_change)
+    clip_src = st.radio("Source", ["Local File", "YouTube URL"], key="clip_src", label_visibility="collapsed", on_change=on_clip_change)
     if clip_src == "Local File":
         clip_input = st.file_uploader(
             "Upload audio clip (MP3 or WAV)",
@@ -287,7 +291,7 @@ with col1:
                         st.success("Found a matching full audio URL!")
                         st.session_state.full_src = "YouTube URL"
                         st.session_state.full_url = matched_url
-                        st.session_state.window_start_input = "00:10:00"
+                        st.session_state.window_start_input = "03:30:00"
                         st.rerun()
                     else:
                         st.error("Could not find a matching video/stream on NWTVMedia.")
@@ -316,7 +320,7 @@ with col1:
 with col2:
     st.subheader("2. Full Audio (Search Target)")
 
-    full_src = st.radio("Source", ["YouTube URL", "Local File"], key="full_src", label_visibility="collapsed", on_change=on_src_change)
+    full_src = st.radio("Source", ["YouTube URL", "Local File"], key="full_src", label_visibility="collapsed", on_change=on_full_change)
     if full_src == "YouTube URL":
         full_input = st.text_input(
             "YouTube URL of full audio",
