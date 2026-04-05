@@ -242,6 +242,8 @@ st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
 if "_pending_clip_src" in st.session_state:
     st.session_state.clip_src = st.session_state._pending_clip_src
     st.session_state.clip_url = st.session_state._pending_clip_url
+    if st.session_state.clip_src == "YouTube URL":
+        st.session_state.window_start_input = "00:10:00"
     del st.session_state["_pending_clip_src"]
     del st.session_state["_pending_clip_url"]
 
