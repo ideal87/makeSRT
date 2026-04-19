@@ -86,13 +86,29 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
     y, m, d = date_str[0:4], date_str[4:6], date_str[6:8]
 
     if target_type == "short_clip":
-        match_str = f"{y}-{m}-{d} ["
+        import datetime
         try:
-            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=10)
+            dt = datetime.datetime.strptime(date_str, "%Y%m%d")
+            eng_date = dt.strftime("%B %d, %Y").replace(" 0", " ")
+        except Exception:
+            eng_date = "---"
+
+        dash_match = f"{y}-{m}-{d}"
+        dot_match = f"{y}.{m}.{d}"
+        
+        try:
+            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=30)
+            matched_videos = []
             for v in videos:
                 title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
-                if match_str in title:
-                    return f"https://www.youtube.com/watch?v={v['videoId']}"
+                if dash_match in title or dot_match in title or eng_date in title:
+                    # Prefer videos that look like sermons/short clips
+                    if "Live recording" not in title and "Praise" not in title and "예배" not in title and "기도회" not in title:
+                        return f"https://www.youtube.com/watch?v={v['videoId']}"
+                    # Fallback to just adding it to matched
+                    matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
+            if matched_videos:
+                return matched_videos[-1] # Return the oldest match if no preferred title
         except Exception:
             pass
         return None
@@ -103,7 +119,7 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
 
         matched_streams = []
         try:
-            streams = scrapetube.get_channel(channel_username='nwtvmedia', limit=5, content_type='streams')
+            streams = scrapetube.get_channel(channel_username='nwtvmedia', limit=30, content_type='streams')
             for v in streams:
                 title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
                 if stream_match in title or video_match in title:
@@ -116,7 +132,7 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
 
         matched_videos = []
         try:
-            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=5)
+            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=30)
             for v in videos:
                 title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
                 if video_match in title or stream_match in title:
@@ -250,6 +266,9 @@ if "_pending_clip_src" in st.session_state:
 if "window_start_input" not in st.session_state:
     st.session_state["window_start_input"] = "03:30:00"
 
+if "trigger_find" not in st.session_state:
+    st.session_state["trigger_find"] = False
+
 st.title("🎯 Audio Timestamp Finder")
 st.markdown(
     "Select your sources for the **Short Clip** and the **Full Audio**, then click find! "
@@ -286,6 +305,22 @@ with col1:
             if m:
                 date_prefix = m.group(1)
                 st.info(f"Detected date prefix: {date_prefix}")
+                
+                # --- AUTO-FETCH LOGIC ---
+                file_id = f"clip_{clip_input.name}_{clip_input.size}"
+                if st.session_state.get("last_clip_file") != file_id:
+                    st.session_state["last_clip_file"] = file_id
+                    with st.spinner("Automatically searching YouTube for a matching date..."):
+                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
+                    if matched_url:
+                        st.success("Found a matching full audio URL! Starting find process...")
+                        st.session_state.full_src = "YouTube URL"
+                        st.session_state.full_url = matched_url
+                        st.session_state.window_start_input = "03:30:00"
+                        st.session_state.trigger_find = True
+                        st.rerun()
+                # ------------------------
+
                 if st.button("Fetch URL", key="fetch_url_btn"):
                     with st.spinner("Searching YouTube for a matching date..."):
                         matched_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
@@ -355,6 +390,21 @@ with col2:
             if m:
                 date_prefix = m.group(1)
                 st.info(f"Detected date prefix: {date_prefix}")
+
+                # --- AUTO-FETCH LOGIC ---
+                file_id = f"full_{full_input.name}_{full_input.size}"
+                if st.session_state.get("last_full_file") != file_id:
+                    st.session_state["last_full_file"] = file_id
+                    with st.spinner("Automatically searching YouTube for a matching date..."):
+                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
+                    if matched_url:
+                        st.success("Found a matching short clip URL! Starting find process...")
+                        st.session_state._pending_clip_src = "YouTube URL"
+                        st.session_state._pending_clip_url = matched_url
+                        st.session_state.trigger_find = True
+                        st.rerun()
+                # ------------------------
+
                 if st.button("Fetch URL", key="fetch_url_btn_full"):
                     with st.spinner("Searching YouTube for a matching date..."):
                         matched_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
@@ -378,7 +428,11 @@ window_start = st.text_input(
 
 col_find, col_stop = st.columns(2)
 with col_find:
+    # Manual button or automatic trigger
     find_btn = st.button("🔍 Find Timestamp", type="primary", use_container_width=True)
+    if st.session_state.get("trigger_find"):
+        find_btn = True
+        st.session_state["trigger_find"] = False
 with col_stop:
     stop_btn = st.button("🛑 Stop Processing", use_container_width=True)
 
