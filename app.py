@@ -294,8 +294,8 @@ with col1:
     clip_src = st.radio("Source", ["Local File", "YouTube URL"], key="clip_src", label_visibility="collapsed", on_change=on_clip_change)
     if clip_src == "Local File":
         clip_input = st.file_uploader(
-            "Upload audio clip (MP3 or WAV)",
-            type=["mp3", "wav"],
+            "Upload clip (MP3, WAV, or MP4)",
+            type=["mp3", "wav", "mp4"],
             help="The first ~30 seconds will be used as the search template.",
             key="clip_uploader"
         )
@@ -380,8 +380,8 @@ with col2:
                         st.error(f"❌ Cannot access video: {msg}")
     else:
         full_input = st.file_uploader(
-            "Upload full audio file (MP3/WAV)",
-            type=["mp3", "wav"],
+            "Upload full file (MP3/WAV/MP4)",
+            type=["mp3", "wav", "mp4"],
             key="full_uploader"
         )
         if full_input:
