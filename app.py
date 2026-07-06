@@ -591,9 +591,9 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
     
     col_adhoc_lang, col_adhoc_name = st.columns(2)
     with col_adhoc_lang:
-        adhoc_lang = st.selectbox("Caption Language", ["ko", "en"], index=0, key="adhoc_lang")
+        adhoc_lang = st.selectbox("Caption Language", ["en", "ko"], index=0, key="adhoc_lang")
     with col_adhoc_name:
-        adhoc_caption_name = st.text_input("Caption Track Name", value="Korean" if adhoc_lang == "ko" else "English", key="adhoc_caption_name")
+        adhoc_caption_name = st.text_input("Caption Track Name", value="English" if adhoc_lang == "en" else "English", key="adhoc_caption_name")
         
     adhoc_upload_btn = st.button("📤 Upload Ad-hoc Subtitles", type="primary", key="adhoc_upload_btn", use_container_width=True)
     if adhoc_upload_btn:
