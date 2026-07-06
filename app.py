@@ -356,6 +356,112 @@ def shift_srt_content_piecewise(srt_content: str, cut_points: list[float], offse
 
 st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
 
+# ── Sidebar: YouTube Authentication Status ────────────────────────────────────
+with st.sidebar:
+    st.subheader("🔑 YouTube Authentication")
+    
+    import os
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    
+    SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
+    creds = None
+    status = "NOT_AUTHENTICATED"
+    
+    if os.path.exists('token.json'):
+        try:
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            if creds:
+                if creds.valid:
+                    status = "VALID"
+                elif creds.expired:
+                    status = "EXPIRED"
+        except Exception:
+            status = "ERROR"
+            
+    if status == "VALID":
+        st.success("🟢 Connected to YouTube")
+        st.caption("Your API credentials are valid and active.")
+        
+        if st.button("🔄 Force Refresh Token", key="sb_refresh", use_container_width=True):
+            try:
+                with st.spinner("Refreshing credentials..."):
+                    creds.refresh(Request())
+                    with open('token.json', 'w') as token_file:
+                        token_file.write(creds.to_json())
+                st.success("Token refreshed successfully!")
+                st.rerun()
+            except Exception as e:
+                if "invalid_grant" in str(e):
+                    if os.path.exists('token.json'):
+                        os.remove('token.json')
+                    st.error("❌ Your session has been revoked or expired. Please click 'Authenticate' to log in again.")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to refresh: {e}")
+                
+        if st.button("❌ Disconnect Account", key="sb_disconnect", use_container_width=True):
+            if os.path.exists('token.json'):
+                os.remove('token.json')
+            st.success("Account disconnected.")
+            st.rerun()
+            
+    elif status == "EXPIRED":
+        st.warning("🟡 Credentials Expired")
+        st.caption("Your session has expired. Renew to continue uploading captions.")
+        
+        if st.button("🔄 Renew Credentials", key="sb_renew", use_container_width=True):
+            try:
+                with st.spinner("Renewing credentials..."):
+                    creds.refresh(Request())
+                    with open('token.json', 'w') as token_file:
+                        token_file.write(creds.to_json())
+                st.success("Credentials renewed successfully!")
+                st.rerun()
+            except Exception as e:
+                if "invalid_grant" in str(e):
+                    if os.path.exists('token.json'):
+                        os.remove('token.json')
+                    st.error("❌ Your session has been revoked or expired. Please click 'Authenticate' to log in again.")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to renew: {e}")
+                
+        if st.button("❌ Disconnect Account", key="sb_disconnect_expired", use_container_width=True):
+            if os.path.exists('token.json'):
+                os.remove('token.json')
+            st.success("Account disconnected.")
+            st.rerun()
+            
+    else:
+        st.error("🔴 Disconnected")
+        st.caption("No valid YouTube account linked.")
+        
+        if not os.path.exists('client_secret.json'):
+            st.info("💡 To authenticate, please place your `client_secret.json` credentials file in the project directory.")
+        else:
+            if st.button("🔑 Authenticate", key="sb_auth", use_container_width=True):
+                try:
+                    with st.spinner("Complete auth in browser..."):
+                        flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+                        auth_url, _ = flow.authorization_url(prompt='select_account consent', access_type='offline')
+                        
+                        st.info("If the auth page does not open automatically, visit this URL:")
+                        st.code(auth_url)
+                        
+                        creds = flow.run_local_server(
+                            port=8090, 
+                            timeout_seconds=300, 
+                            authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
+                        )
+                        with open('token.json', 'w') as token_file:
+                            token_file.write(creds.to_json())
+                    st.success("Authenticated successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Authentication failed: {e}")
+
 if "_pending_clip_src" in st.session_state:
     st.session_state.clip_src = st.session_state._pending_clip_src
     st.session_state.clip_url = st.session_state._pending_clip_url
@@ -375,6 +481,83 @@ st.markdown(
     "Select your sources for the **Short Clip** and the **Full Audio**, then click find! "
     "The app will locate the exact timestamp where the short clip begins within the full audio."
 )
+
+# ── Ad-hoc YouTube Caption Upload Expander ────────────────────────────────────
+with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
+    st.markdown(
+        "Directly upload an existing SRT subtitle file to a YouTube video. "
+        "This skips the audio timestamp search and shifts."
+    )
+    adhoc_url = st.text_input("YouTube Video URL", key="adhoc_url", placeholder="https://www.youtube.com/watch?v=...")
+    adhoc_srt_file = st.file_uploader("Upload SRT Subtitle File", type=["srt"], key="adhoc_srt")
+    
+    col_adhoc_lang, col_adhoc_name = st.columns(2)
+    with col_adhoc_lang:
+        adhoc_lang = st.selectbox("Caption Language", ["ko", "en"], index=0, key="adhoc_lang")
+    with col_adhoc_name:
+        adhoc_caption_name = st.text_input("Caption Track Name", value="Korean" if adhoc_lang == "ko" else "English", key="adhoc_caption_name")
+        
+    adhoc_upload_btn = st.button("📤 Upload Ad-hoc Subtitles", type="primary", key="adhoc_upload_btn", use_container_width=True)
+    if adhoc_upload_btn:
+        import os
+        if not os.path.exists('token.json'):
+            st.error("❌ Not authenticated. Please connect your YouTube account in the sidebar first.")
+        elif not adhoc_url:
+            st.error("❌ Please enter a YouTube video URL.")
+        elif not adhoc_srt_file:
+            st.error("❌ Please upload an SRT file.")
+        else:
+            try:
+                from google.oauth2.credentials import Credentials
+                from google.auth.transport.requests import Request
+                from googleapiclient.discovery import build
+                from googleapiclient.http import MediaIoBaseUpload
+                import io
+
+                SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
+                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                
+                if creds and creds.expired and creds.refresh_token:
+                    with st.spinner("Refreshing credentials..."):
+                        creds.refresh(Request())
+                        with open('token.json', 'w') as token_file:
+                            token_file.write(creds.to_json())
+                            
+                video_id = extract_video_id(adhoc_url)
+                if not video_id:
+                    st.error("❌ Could not extract YouTube Video ID from the URL.")
+                else:
+                    with st.spinner("Uploading ad-hoc subtitles to YouTube..."):
+                        content = adhoc_srt_file.read().decode("utf-8")
+                        media = MediaIoBaseUpload(
+                            io.BytesIO(content.encode("utf-8")),
+                            mimetype="application/octet-stream",
+                            resumable=True
+                        )
+                        
+                        youtube = build('youtube', 'v3', credentials=creds)
+                        request = youtube.captions().insert(
+                            part="snippet",
+                            body={
+                                "snippet": {
+                                    "videoId": video_id,
+                                    "language": adhoc_lang,
+                                    "name": adhoc_caption_name,
+                                    "isDraft": False
+                                }
+                            },
+                            media_body=media
+                        )
+                        response = request.execute()
+                        st.success(f"✅ Ad-hoc subtitles uploaded successfully! Caption ID: {response['id']}")
+            except Exception as e:
+                if "invalid_grant" in str(e):
+                    if os.path.exists('token.json'):
+                        os.remove('token.json')
+                    st.error("❌ Your session has been revoked or expired. Please re-authenticate in the sidebar.")
+                    st.rerun()
+                else:
+                    st.error(f"❌ YouTube API error: {e}")
 
 st.divider()
 
