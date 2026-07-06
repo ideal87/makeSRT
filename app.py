@@ -253,6 +253,105 @@ def shift_srt_content(srt_content: str, shift_seconds: float) -> str:
     return '\n\n'.join(out_lines) + '\n'
 
 
+def shift_srt_content_piecewise(srt_content: str, cut_points: list[float], offsets: list[float]) -> str:
+    """
+    Shift all timestamps in an SRT string based on piecewise linear mapping
+    determined by cut points in the short clip and their offsets in the full audio.
+    """
+    import re
+    time_pattern = re.compile(r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})")
+    
+    def parse_srt_time(t_str: str) -> float:
+        h, m, s, ms = int(t_str[0:2]), int(t_str[3:5]), int(t_str[6:8]), int(t_str[9:12])
+        return h * 3600 + m * 60 + s + ms / 1000.0
+
+    def format_srt_time(sec: float) -> str:
+        if sec < 0: sec = 0.0
+        h = int(sec // 3600)
+        m = int((sec % 3600) // 60)
+        s = int(sec % 60)
+        ms = int(round((sec % 1) * 1000))
+        if ms >= 1000:
+            s += 1
+            ms -= 1000
+            if s >= 60:
+                m += 1
+                s -= 60
+                if m >= 60:
+                    h += 1
+                    m -= 60
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def map_time(t: float) -> float | None:
+        # Find the appropriate segment index
+        for i in range(len(offsets) - 1, -1, -1):
+            if t >= offsets[i]:
+                t_mapped = cut_points[i] + (t - offsets[i])
+                if i < len(offsets) - 1:
+                    # If this timestamp falls within the cut region (past the start of the next segment in the clip)
+                    if t_mapped >= cut_points[i+1]:
+                        return None
+                return t_mapped
+        return None
+
+    blocks = re.split(r'\n\s*\n', srt_content.strip())
+    out_lines = []
+    counter = 1
+    
+    for block in blocks:
+        block_lines = block.split('\n')
+        if not block_lines: continue
+        
+        time_line_idx = -1
+        for i, line in enumerate(block_lines):
+            if '-->' in line:
+                time_line_idx = i
+                break
+                
+        if time_line_idx != -1:
+            match = time_pattern.search(block_lines[time_line_idx])
+            if match:
+                start_str, end_str = match.group(1), match.group(2)
+                t_start = parse_srt_time(start_str)
+                t_end = parse_srt_time(end_str)
+                
+                new_start_sec = map_time(t_start)
+                new_end_sec = map_time(t_end)
+                
+                if new_start_sec is None and new_end_sec is None:
+                    continue
+                
+                # Handle clamping if start or end timestamp falls outside the segment boundary
+                if new_start_sec is None:
+                    for i in range(len(offsets) - 1, -1, -1):
+                        if t_end >= offsets[i]:
+                            new_start_sec = cut_points[i]
+                            break
+                    if new_start_sec is None:
+                        new_start_sec = 0.0
+                
+                if new_end_sec is None:
+                    for i in range(len(offsets) - 1, -1, -1):
+                        if t_start >= offsets[i]:
+                            if i < len(cut_points) - 1:
+                                new_end_sec = cut_points[i+1]
+                            else:
+                                new_end_sec = new_start_sec + (t_end - t_start)
+                            break
+                    if new_end_sec is None:
+                        new_end_sec = new_start_sec + (t_end - t_start)
+                
+                new_start = format_srt_time(new_start_sec)
+                new_end = format_srt_time(new_end_sec)
+                
+                new_time_line = block_lines[time_line_idx].replace(start_str, new_start).replace(end_str, new_end)
+                new_block = [str(counter), new_time_line] + block_lines[time_line_idx+1:]
+                out_lines.append('\n'.join(new_block))
+                counter += 1
+                
+    return '\n\n'.join(out_lines) + '\n'
+
+
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Audio Timestamp Finder", page_icon="🎯")
@@ -527,35 +626,41 @@ if find_btn:
             assert clip_url is not None
             video_id = extract_video_id(clip_url)
             cached = st.session_state.get("cached_clip_id")
-            if cached == video_id and "clip_audio" in st.session_state:
+            if cached == video_id and "clip_audio" in st.session_state and "clip_full_audio" in st.session_state:
                 status.write(f"{elapsed()}  ✅  Using cached short clip audio.")
                 clip = st.session_state["clip_audio"]
+                clip_full = st.session_state["clip_full_audio"]
             else:
                 status.write(f"{elapsed()}  ⬇️  Downloading short clip from YouTube…")
                 yt_clip_path = os.path.join(tempfile.gettempdir(), f"yt_clip_{video_id}.mp3")
                 assert clip_url is not None
                 download_youtube_audio(clip_url, yt_clip_path)
-                status.write(f"{elapsed()}  🎵  Loading clip audio into memory (first {CLIP_DURATION}s)…")
-                clip = load_clip(yt_clip_path, duration=CLIP_DURATION)
+                status.write(f"{elapsed()}  🎵  Loading full clip audio into memory…")
+                clip_full = load_full_audio(yt_clip_path)
+                clip = clip_full[:int(CLIP_DURATION * SAMPLE_RATE)]
                 if os.path.exists(yt_clip_path):
                     os.remove(yt_clip_path)
                 st.session_state["clip_audio"] = clip
+                st.session_state["clip_full_audio"] = clip_full
                 st.session_state["cached_clip_id"] = video_id
         else:
             file_id = f"clip_{clip_input.name}_{clip_input.size}"
-            if st.session_state.get("cached_clip_id") == file_id and "clip_audio" in st.session_state:
+            if st.session_state.get("cached_clip_id") == file_id and "clip_audio" in st.session_state and "clip_full_audio" in st.session_state:
                 status.write(f"{elapsed()}  ✅  Using cached short local clip.")
                 clip = st.session_state["clip_audio"]
+                clip_full = st.session_state["clip_full_audio"]
             else:
                 suffix = os.path.splitext(clip_input.name)[1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     tmp.write(clip_input.read())
                     clip_path = tmp.name
                 
-                status.write(f"{elapsed()}  🎵  Loading clip audio into memory (first {CLIP_DURATION}s)…")
-                clip = load_clip(clip_path, duration=CLIP_DURATION)
+                status.write(f"{elapsed()}  🎵  Loading full clip audio into memory…")
+                clip_full = load_full_audio(clip_path)
+                clip = clip_full[:int(CLIP_DURATION * SAMPLE_RATE)]
                 os.remove(clip_path)
                 st.session_state["clip_audio"] = clip
+                st.session_state["clip_full_audio"] = clip_full
                 st.session_state["cached_clip_id"] = file_id
 
         status.write(f"{elapsed()}  ✅  Clip loaded ({len(clip)/SAMPLE_RATE:.1f}s).")
@@ -628,6 +733,9 @@ if find_btn:
                 "clip_src": clip_src,
                 "full_src": full_src,
             }
+            for k in ["cut_points", "offsets", "cut_results_table", "additional_cuts_input_val"]:
+                if k in st.session_state:
+                    del st.session_state[k]
 
             if confidence < 0.15:
                 st.warning(
@@ -645,16 +753,132 @@ if "match_result" in st.session_state:
     res = st.session_state["match_result"]
     if res["clip_src"] == "YouTube URL" and res["full_src"] == "Local File":
         st.divider()
-        st.subheader("Shift Subtitles (SRT)")
+        st.subheader("✂️ Detect Additional Cuts in Short Clip")
         st.markdown(
-            "Upload the SRT file that corresponds to the local target audio. "
-            "This will shift all timestamps backwards by the match offset "
-            f"(**{res['offset_sec']:.3f}s**)."
+            "If the short clip has cuts (omitted sections of the full audio), "
+            "enter the cut timestamps in the short clip format (`HH:MM:SS` or `MM:SS`, comma-separated, up to 7). "
+            "We will search the full audio after each cut point to establish a piecewise shift."
         )
+        
+        additional_cuts_str = st.text_input(
+            "Cut timestamps in short clip (comma-separated, up to 7)",
+            value=st.session_state.get("additional_cuts_input_val", ""),
+            placeholder="e.g. 00:05:30, 00:15:45",
+            key="additional_cuts_input"
+        )
+        
+        analyze_cuts = st.button("🔍 Find Cuts & Update Shifts", type="secondary")
+        
+        if analyze_cuts:
+            raw_cuts = [c.strip() for c in additional_cuts_str.split(",") if c.strip()]
+            raw_cuts = raw_cuts[:7]
+            
+            try:
+                cut_seconds = []
+                for c in raw_cuts:
+                    cut_seconds.append(hms_to_seconds(c))
+            except Exception:
+                st.error("Invalid timestamp format. Use HH:MM:SS or MM:SS.")
+                st.stop()
+                
+            cut_seconds = sorted([c for c in cut_seconds if c > 0])
+            
+            full_audio = st.session_state.get("full_audio")
+            clip_full_audio = st.session_state.get("clip_full_audio")
+            
+            if full_audio is None or clip_full_audio is None:
+                st.error("Audio cache missing. Please run the initial Find Timestamp again.")
+                st.stop()
+                
+            cut_points = [0.0]
+            offsets = [res["offset_sec"]]
+            cut_results = []
+            
+            with st.spinner("Analyzing cuts..."):
+                for i, c_sec in enumerate(cut_seconds):
+                    prev_c = cut_points[i]
+                    prev_o = offsets[i]
+                    expected_o = prev_o + (c_sec - prev_c)
+                    
+                    template_start_sample = int(c_sec * SAMPLE_RATE)
+                    template_end_sample = min(len(clip_full_audio), template_start_sample + int(CLIP_DURATION * SAMPLE_RATE))
+                    
+                    if template_start_sample >= len(clip_full_audio):
+                        st.warning(f"Cut timestamp {seconds_to_hms(c_sec)} is beyond short clip length.")
+                        break
+                        
+                    template = clip_full_audio[template_start_sample:template_end_sample]
+                    
+                    search_start_sec = max(0.0, expected_o - 10.0)
+                    search_end_sec = min(len(full_audio) / SAMPLE_RATE, expected_o + 300.0)
+                    
+                    start_sample = int(search_start_sec * SAMPLE_RATE)
+                    end_sample = int(search_end_sec * SAMPLE_RATE)
+                    
+                    if start_sample >= len(full_audio) or start_sample >= end_sample:
+                        st.warning(f"Search window for cut {seconds_to_hms(c_sec)} is outside full audio range.")
+                        break
+                        
+                    search_window = full_audio[start_sample:end_sample]
+                    
+                    offset_in_window, confidence = find_offset(search_window, template)
+                    actual_o = search_start_sec + offset_in_window
+                    
+                    if confidence < 0.02:
+                        st.warning(f"Could not find matching audio for cut at {seconds_to_hms(c_sec)} (low confidence: {confidence:.2%}). Assuming no gap.")
+                        actual_o = expected_o
+                        gap_sec = 0.0
+                    else:
+                        gap_sec = actual_o - expected_o
+                        
+                    cut_points.append(c_sec)
+                    offsets.append(actual_o)
+                    
+                    cut_results.append({
+                        "Cut Timestamp": seconds_to_hms(c_sec),
+                        "Expected Full Offset": seconds_to_hms(expected_o, ms=True),
+                        "Found Full Offset": seconds_to_hms(actual_o, ms=True),
+                        "Confidence": f"{confidence:.2%}",
+                        "Detected Gap": f"{gap_sec:.3f}s" if gap_sec > 0.01 else "None",
+                        "Status": "✅ Matched" if confidence >= 0.02 else "⚠️ Fallback"
+                    })
+                    
+            st.session_state["cut_points"] = cut_points
+            st.session_state["offsets"] = offsets
+            st.session_state["cut_results_table"] = cut_results
+            st.session_state["additional_cuts_input_val"] = additional_cuts_str
+            st.success("Cuts analyzed successfully!")
+
+        if "cut_results_table" in st.session_state and st.session_state["cut_results_table"]:
+            import pandas as pd
+            st.markdown("### Detected Cuts & Segments Mapping")
+            df = pd.DataFrame(st.session_state["cut_results_table"])
+            st.dataframe(df, use_container_width=True)
+
+        st.divider()
+        st.subheader("Shift Subtitles (SRT)")
+        
+        if "cut_points" in st.session_state and "offsets" in st.session_state and len(st.session_state["cut_points"]) > 1:
+            st.info("Piecewise subtitle shifting is active based on the cuts detected above.")
+        else:
+            st.markdown(
+                "Upload the SRT file that corresponds to the local target audio. "
+                "This will shift all timestamps backwards by the match offset "
+                f"(**{res['offset_sec']:.3f}s**)."
+            )
+            
         srt_file = st.file_uploader("Upload SRT File", type=["srt"])
         if srt_file:
             content = srt_file.read().decode("utf-8")
-            shifted = shift_srt_content(content, res["offset_sec"])
+            
+            if "cut_points" in st.session_state and "offsets" in st.session_state and len(st.session_state["cut_points"]) > 1:
+                cut_points = st.session_state["cut_points"]
+                offsets = st.session_state["offsets"]
+                shifted = shift_srt_content_piecewise(content, cut_points, offsets)
+                st.success("Subtitles shifted successfully using piecewise segment mapping!")
+            else:
+                shifted = shift_srt_content(content, res["offset_sec"])
+                st.success(f"Subtitles shifted successfully by -{res['offset_sec']:.3f}s!")
             
             orig_name = srt_file.name
             if orig_name.lower().endswith(".srt"):
@@ -662,7 +886,6 @@ if "match_result" in st.session_state:
             else:
                 new_name = orig_name + "_shifted.srt"
                 
-            st.success("Subtitle shifted successfully!")
             st.download_button(
                 label="📥 Download Shifted SRT",
                 data=shifted,

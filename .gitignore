@@ -1,0 +1,13 @@
+# Sensitive credentials & keys
+client_secret.json
+token.json
+.env
+
+# Python environment & cache
+__pycache__/
+*.pyc
+.venv/
+.devcontainer/
+
+# Streamlit local state
+.streamlit/
