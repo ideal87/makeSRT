@@ -77,54 +77,84 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
 def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -> str | None:
     """
     Search NWTVMedia for a video or stream matching the YYYYMMDD date prefix.
-    If target_type is "short_clip", searches for "YYYY-MM-DD [" in videos.
-    If target_type is "full_audio", searches for "YYYY.MM.DD" in streams (returns earliest).
+    If target_type is "short_clip", searches for videos.
+    If target_type is "full_audio", searches for streams, falling back to videos.
     """
-    import scrapetube
-
     if len(date_str) != 8 or not date_str.isdigit():
         return None
     
     y, m, d = date_str[0:4], date_str[4:6], date_str[6:8]
 
-    if target_type == "short_clip":
-        import datetime
-        try:
-            dt = datetime.datetime.strptime(date_str, "%Y%m%d")
-            eng_date = dt.strftime("%B %d, %Y").replace(" 0", " ")
-        except Exception:
-            eng_date = "---"
+    # Generate matching pattern candidates
+    dash_match_ymd = f"{y}-{m}-{d}"
+    dot_match_ymd = f"{y}.{m}.{d}"
+    slash_match_mdy = f"{m}/{d}/{y}"
+    dash_match_mdy = f"{m}-{d}-{y}"
+    dot_match_mdy = f"{m}.{d}.{y}"
+    
+    import datetime
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y%m%d")
+        eng_date = dt.strftime("%B %d, %Y").replace(" 0", " ")
+        eng_date_short = dt.strftime("%b %d, %Y").replace(" 0", " ")
+    except Exception:
+        eng_date = "---"
+        eng_date_short = "---"
 
-        dash_match = f"{y}-{m}-{d}"
-        dot_match = f"{y}.{m}.{d}"
-        
+    patterns = [dash_match_ymd, dot_match_ymd, slash_match_mdy, dash_match_mdy, dot_match_mdy, eng_date, eng_date_short]
+    patterns = [p for p in patterns if p and p != "---"]
+
+    def title_matches(title: str) -> bool:
+        for p in patterns:
+            if p in title:
+                return True
+        return False
+
+    def get_channel_videos_yt_dlp(channel_url: str, limit: int = 30) -> list[dict]:
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--flat-playlist",
+            "--playlist-end", str(limit),
+            "--extractor-args", "youtube:player_client=default,-android_sdkless",
+            "--print", "%(title)s | %(id)s",
+            channel_url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        videos = []
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if '|' in line:
+                    parts = line.split('|')
+                    title = parts[0].strip()
+                    video_id = parts[-1].strip()
+                    videos.append({"title": title, "videoId": video_id})
+        return videos
+
+    if target_type == "short_clip":
         try:
-            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=30)
+            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=30)
             matched_videos = []
             for v in videos:
-                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
-                if dash_match in title or dot_match in title or eng_date in title:
+                title = v.get('title', '')
+                if title_matches(title):
                     # Prefer videos that look like sermons/short clips
                     if "Live recording" not in title and "Praise" not in title and "예배" not in title and "기도회" not in title:
                         return f"https://www.youtube.com/watch?v={v['videoId']}"
-                    # Fallback to just adding it to matched
                     matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
             if matched_videos:
-                return matched_videos[-1] # Return the oldest match if no preferred title
+                return matched_videos[-1]
         except Exception:
             pass
         return None
 
     else:
-        video_match = f"{y}-{m}-{d}"
-        stream_match = f"{y}.{m}.{d}"
-
+        # target_type == "full_audio"
         matched_streams = []
         try:
-            streams = scrapetube.get_channel(channel_username='nwtvmedia', limit=30, content_type='streams')
+            streams = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/streams", limit=30)
             for v in streams:
-                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
-                if stream_match in title or video_match in title:
+                title = v.get('title', '')
+                if title_matches(title):
                     matched_streams.append(f"https://www.youtube.com/watch?v={v['videoId']}")
         except Exception:
             pass
@@ -134,10 +164,10 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
 
         matched_videos = []
         try:
-            videos = scrapetube.get_channel(channel_username='nwtvmedia', limit=30)
+            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=30)
             for v in videos:
-                title = v.get('title', {}).get('runs', [{}])[0].get('text', '')
-                if video_match in title or stream_match in title:
+                title = v.get('title', '')
+                if title_matches(title):
                     matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
         except Exception:
             pass
