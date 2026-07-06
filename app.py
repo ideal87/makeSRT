@@ -732,6 +732,7 @@ if find_btn:
                 "offset_sec": offset_sec,
                 "clip_src": clip_src,
                 "full_src": full_src,
+                "clip_url": clip_url if clip_src == "YouTube URL" else None,
             }
             for k in ["cut_points", "offsets", "cut_results_table", "additional_cuts_input_val"]:
                 if k in st.session_state:
@@ -886,11 +887,74 @@ if "match_result" in st.session_state:
             else:
                 new_name = orig_name + "_shifted.srt"
                 
-            st.download_button(
-                label="📥 Download Shifted SRT",
-                data=shifted,
-                file_name=new_name,
-                mime="text/plain",
-                type="primary"
-            )
+            col_dl, col_ul = st.columns(2)
+            with col_dl:
+                st.download_button(
+                    label="📥 Download Shifted SRT",
+                    data=shifted,
+                    file_name=new_name,
+                    mime="text/plain",
+                    type="primary",
+                    use_container_width=True
+                )
+                
+            with col_ul:
+                import os
+                if not os.path.exists('token.json'):
+                    st.warning("⚠️ 'token.json' not found. Run `python auth.py` in the terminal to authenticate your YouTube account.")
+                else:
+                    try:
+                        from google.oauth2.credentials import Credentials
+                        from google.auth.transport.requests import Request
+                        from googleapiclient.discovery import build
+                        from googleapiclient.http import MediaIoBaseUpload
+                        import io
+
+                        # Scopes from auth.py
+                        SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
+                        
+                        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                        if creds and creds.expired and creds.refresh_token:
+                            with st.spinner("Refreshing YouTube credentials..."):
+                                creds.refresh(Request())
+                                with open('token.json', 'w') as token_file:
+                                    token_file.write(creds.to_json())
+                                    
+                        lang = st.selectbox("Caption Language", ["ko", "en"], index=0)
+                        caption_name = st.text_input("Caption Track Name", value="Korean" if lang == "ko" else "English")
+                        
+                        upload_btn = st.button("📤 Upload to YouTube", type="primary", use_container_width=True)
+                        if upload_btn:
+                            clip_url = res.get("clip_url") or st.session_state.get("clip_url")
+                            video_id = extract_video_id(clip_url) if clip_url else None
+                            
+                            if not video_id:
+                                st.error("❌ Could not extract YouTube video ID from short clip URL.")
+                            else:
+                                with st.spinner("Uploading subtitle track to YouTube..."):
+                                    youtube = build('youtube', 'v3', credentials=creds)
+                                    
+                                    # In-memory MediaIoBaseUpload
+                                    media = MediaIoBaseUpload(
+                                        io.BytesIO(shifted.encode("utf-8")),
+                                        mimetype="application/octet-stream",
+                                        resumable=True
+                                    )
+                                    
+                                    request = youtube.captions().insert(
+                                        part="snippet",
+                                        body={
+                                            "snippet": {
+                                                "videoId": video_id,
+                                                "language": lang,
+                                                "name": caption_name,
+                                                "isDraft": False
+                                            }
+                                        },
+                                        media_body=media
+                                    )
+                                    response = request.execute()
+                                    st.success(f"✅ Subtitles uploaded successfully! Caption ID: {response['id']}")
+                    except Exception as e:
+                        st.error(f"❌ YouTube API error: {e}")
 
