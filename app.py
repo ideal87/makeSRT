@@ -325,6 +325,71 @@ def shift_srt_content_piecewise(srt_content: str, cut_points: list[float], offse
         return None
 
     blocks = re.split(r'\n\s*\n', srt_content.strip())
+    
+    # ── Snap Cut Points and Offsets to Subtitle Boundaries ────────────────────
+    sub_boundaries = []
+    for block in blocks:
+        block_lines = block.split('\n')
+        if not block_lines: continue
+        time_line_idx = -1
+        for idx, line in enumerate(block_lines):
+            if '-->' in line:
+                time_line_idx = idx
+                break
+        if time_line_idx != -1:
+            match = time_pattern.search(block_lines[time_line_idx])
+            if match:
+                t_start = parse_srt_time(match.group(1))
+                t_end = parse_srt_time(match.group(2))
+                sub_boundaries.extend([t_start, t_end])
+                
+    if sub_boundaries:
+        sub_boundaries = sorted(list(set(sub_boundaries)))
+        refined_cut_points = [cut_points[0]]
+        refined_offsets = [offsets[0]]
+        
+        for j in range(1, len(cut_points)):
+            C_j = cut_points[j]
+            O_j = offsets[j]
+            prev_C = refined_cut_points[-1]
+            prev_O = refined_offsets[-1]
+            
+            E_j = prev_O + (C_j - prev_C)
+            gap_j = O_j - E_j
+            
+            best_t1 = E_j
+            best_t2 = O_j
+            min_loss = float('inf')
+            
+            # Search within 15 seconds of expected and actual offsets
+            candidates_t1 = [t for t in sub_boundaries if abs(t - E_j) <= 15.0]
+            candidates_t2 = [t for t in sub_boundaries if abs(t - O_j) <= 15.0]
+            
+            for t1 in candidates_t1:
+                for t2 in candidates_t2:
+                    if t2 > t1:
+                        error_c1 = t1 - E_j
+                        error_c2 = t2 - O_j
+                        loss = abs((t2 - t1) - gap_j) + abs(error_c1 - error_c2)
+                        if error_c1 < -2.0:
+                            loss += 5.0 * (abs(error_c1) - 2.0)
+                        if loss < min_loss:
+                            min_loss = loss
+                            best_t1 = t1
+                            best_t2 = t2
+                            
+            if min_loss < 2.0:
+                refined_O_j = best_t2
+                refined_C_j = prev_C + (best_t1 - prev_O)
+                refined_cut_points.append(refined_C_j)
+                refined_offsets.append(refined_O_j)
+            else:
+                refined_cut_points.append(C_j)
+                refined_offsets.append(O_j)
+                
+        cut_points = refined_cut_points
+        offsets = refined_offsets
+
     out_lines = []
     counter = 1
     
@@ -370,6 +435,9 @@ def shift_srt_content_piecewise(srt_content: str, cut_points: list[float], offse
                             break
                     if new_end_sec is None:
                         new_end_sec = new_start_sec + (t_end - t_start)
+                
+                if new_end_sec - new_start_sec <= 0.05:
+                    continue
                 
                 new_start = format_srt_time(new_start_sec)
                 new_end = format_srt_time(new_end_sec)
