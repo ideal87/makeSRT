@@ -272,8 +272,10 @@ def shift_srt_content(srt_content: str, shift_seconds: float) -> str:
                 
                 if new_end is None:
                     continue
+                # Drop blocks whose original start is before the cut point
+                # (i.e. shifted start is negative) to avoid residual lines
                 if new_start is None:
-                    new_start = "00:00:00,000"
+                    continue
                 
                 new_time_line = block_lines[time_line_idx].replace(start_str, new_start).replace(end_str, new_end)
                 new_block = [str(counter), new_time_line] + block_lines[time_line_idx+1:]
@@ -416,14 +418,10 @@ def shift_srt_content_piecewise(srt_content: str, cut_points: list[float], offse
                 if new_start_sec is None and new_end_sec is None:
                     continue
                 
-                # Handle clamping if start or end timestamp falls outside the segment boundary
+                # Drop blocks whose original start falls before the segment boundary
+                # to avoid residual partial lines at cut boundaries
                 if new_start_sec is None:
-                    for i in range(len(offsets) - 1, -1, -1):
-                        if t_end >= offsets[i]:
-                            new_start_sec = cut_points[i]
-                            break
-                    if new_start_sec is None:
-                        new_start_sec = 0.0
+                    continue
                 
                 if new_end_sec is None:
                     for i in range(len(offsets) - 1, -1, -1):
