@@ -52,6 +52,40 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         )
 
 
+def upload_caption_track(youtube, video_id: str, language: str, name: str, media) -> str:
+    """
+    Uploads a caption track to a YouTube video.
+    If a caption track with the same language and name already exists, deletes it first.
+    Returns the new caption track ID.
+    """
+    # List existing caption tracks for the video
+    captions_list = youtube.captions().list(part="snippet", videoId=video_id).execute()
+    
+    # Check if a track with the same language and name exists
+    for item in captions_list.get('items', []):
+        snippet = item.get('snippet', {})
+        if snippet.get('language') == language and snippet.get('name') == name:
+            # Delete the existing caption track
+            youtube.captions().delete(id=item['id']).execute()
+            break
+            
+    # Insert the new caption track
+    request = youtube.captions().insert(
+        part="snippet",
+        body={
+            "snippet": {
+                "videoId": video_id,
+                "language": language,
+                "name": name,
+                "isDraft": False
+            }
+        },
+        media_body=media
+    )
+    response = request.execute()
+    return response['id']
+
+
 def check_youtube_url(url: str) -> tuple[bool, str]:
     """Check if a YouTube URL is valid and accessible using yt-dlp."""
     cmd = [
@@ -215,6 +249,49 @@ def find_offset(full_audio: np.ndarray, clip: np.ndarray):
     confidence = np.abs(correlation[peak_index]) / (energy + 1e-9)
 
     return max(0.0, offset_seconds), confidence
+
+
+def find_top_offsets(full_audio: np.ndarray, clip: np.ndarray, num_candidates: int = 3, min_distance_seconds: float = 30.0):
+    """
+    Use normalised cross-correlation to find up to `num_candidates` peak positions.
+    Returns a list of tuples: (offset_seconds, confidence) sorted by confidence descending.
+    """
+    # Normalise both signals
+    full_audio_norm = full_audio / (np.max(np.abs(full_audio)) + 1e-9)
+    clip_norm = clip / (np.max(np.abs(clip)) + 1e-9)
+
+    # Cross-correlate using FFT
+    correlation = fftconvolve(full_audio_norm, clip_norm[::-1], mode="full")
+    corr_abs = np.abs(correlation)
+
+    # Energy calculations for confidence normalization
+    energy = np.sqrt(np.sum(clip_norm ** 2) * np.sum(full_audio_norm ** 2)) + 1e-9
+
+    candidates = []
+    min_distance_samples = int(min_distance_seconds * SAMPLE_RATE)
+
+    for _ in range(num_candidates):
+        peak_index = np.argmax(corr_abs)
+        peak_val = corr_abs[peak_index]
+        if peak_val <= 0.0:
+            break
+        
+        # Convert index → offset
+        offset_samples = peak_index - (len(clip_norm) - 1)
+        offset_seconds = max(0.0, offset_samples / SAMPLE_RATE)
+        confidence = peak_val / energy
+        
+        candidates.append((offset_seconds, confidence))
+        
+        # Suppress the neighborhood of this peak to find other distinct peaks
+        start_suppress = max(0, peak_index - min_distance_samples)
+        end_suppress = min(len(corr_abs), peak_index + min_distance_samples)
+        corr_abs[start_suppress:end_suppress] = 0.0
+        
+        if np.max(corr_abs) <= 0.0:
+            break
+            
+    return candidates
 
 
 def seconds_to_hms(seconds: float, ms: bool = False) -> str:
@@ -632,20 +709,14 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
                         )
                         
                         youtube = build('youtube', 'v3', credentials=creds)
-                        request = youtube.captions().insert(
-                            part="snippet",
-                            body={
-                                "snippet": {
-                                    "videoId": video_id,
-                                    "language": adhoc_lang,
-                                    "name": adhoc_caption_name,
-                                    "isDraft": False
-                                }
-                            },
-                            media_body=media
+                        caption_id = upload_caption_track(
+                            youtube,
+                            video_id=video_id,
+                            language=adhoc_lang,
+                            name=adhoc_caption_name,
+                            media=media
                         )
-                        response = request.execute()
-                        st.success(f"✅ Ad-hoc subtitles uploaded successfully! Caption ID: {response['id']}")
+                        st.success(f"✅ Ad-hoc subtitles uploaded successfully! Caption ID: {caption_id}")
             except Exception as e:
                 if "invalid_grant" in str(e):
                     if os.path.exists('token.json'):
@@ -981,51 +1052,136 @@ if find_btn:
         # -- Display results --
         st.divider()
 
-        if confidence < 0.01:
-            status.write(f"{elapsed()}  ❌  No match found.")
-            status.update(label=f"Done — no match ({elapsed()})", state="error")
-            st.subheader("Result")
-            st.error(
-                "No matching audio found in the search window. "
-                "Try adjusting the start time and clicking **Find Timestamp** "
-                "again (the audio won't be re-downloaded)."
-            )
-        else:
-            status.write(f"{elapsed()}  ✅  Match found!")
-            status.update(label=f"Done! ({elapsed()})", state="complete")
-            st.subheader("Result")
+        is_low_conf_local = (clip_src == "Local File" and confidence < 0.03)
 
-            col1, col2 = st.columns(2)
-            col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec, ms=True))
-            col2.metric("📊 Confidence", f"{confidence:.2%}")
-
-            if full_src == "YouTube URL":
-                assert full_url is not None
-                full_video_id = extract_video_id(full_url)
-                yt_link = f"https://www.youtube.com/watch?v={full_video_id}&t={int(offset_sec)}s"
-                st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+        if is_low_conf_local:
+            status.write(f"{elapsed()}  ⚠️  Confidence is low ({confidence:.2%}). Finding top candidates…")
+            raw_candidates = find_top_offsets(window_audio, clip, num_candidates=3)
+            candidates = [(o + window_start_sec, c) for o, c in raw_candidates]
+            
+            if not candidates:
+                status.write(f"{elapsed()}  ❌  No match found.")
+                status.update(label=f"Done — no match ({elapsed()})", state="error")
+                st.subheader("Result")
+                st.error("No matching audio found in the search window.")
+                if "low_confidence_candidates" in st.session_state:
+                    del st.session_state["low_confidence_candidates"]
+                if "match_result" in st.session_state:
+                    del st.session_state["match_result"]
             else:
-                st.info("Since the full audio is a local file, navigate to this timestamp in your local media player.")
+                status.write(f"{elapsed()}  ✅  Candidate timestamps located.")
+                status.update(label=f"Done! ({elapsed()})", state="complete")
                 
-            st.session_state["match_result"] = {
-                "offset_sec": offset_sec,
-                "clip_src": clip_src,
-                "full_src": full_src,
-                "clip_url": clip_url if clip_src == "YouTube URL" else None,
-            }
-            for k in ["cut_points", "offsets", "cut_results_table", "additional_cuts_input_val"]:
-                if k in st.session_state:
-                    del st.session_state[k]
+                st.session_state["low_confidence_candidates"] = {
+                    "candidates": candidates,
+                    "clip_src": clip_src,
+                    "full_src": full_src,
+                    "clip_url": clip_url,
+                    "full_url": full_url
+                }
+                if "match_result" in st.session_state:
+                    del st.session_state["match_result"]
+                for k in ["cut_points", "offsets", "cut_results_table", "additional_cuts_input_val"]:
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.rerun()
 
-            if confidence < 0.15:
-                st.warning(
-                    "The confidence score is low. The match may not be accurate. "
-                    "Try using a longer or cleaner audio clip."
+        else:
+            if "low_confidence_candidates" in st.session_state:
+                del st.session_state["low_confidence_candidates"]
+
+            if confidence < 0.01:
+                status.write(f"{elapsed()}  ❌  No match found.")
+                status.update(label=f"Done — no match ({elapsed()})", state="error")
+                st.subheader("Result")
+                st.error(
+                    "No matching audio found in the search window. "
+                    "Try adjusting the start time and clicking **Find Timestamp** "
+                    "again (the audio won't be re-downloaded)."
                 )
+                if "match_result" in st.session_state:
+                    del st.session_state["match_result"]
+            else:
+                status.write(f"{elapsed()}  ✅  Match found!")
+                status.update(label=f"Done! ({elapsed()})", state="complete")
+                st.subheader("Result")
+
+                col1, col2 = st.columns(2)
+                col1.metric("⏱️ Timestamp", seconds_to_hms(offset_sec, ms=True))
+                col2.metric("📊 Confidence", f"{confidence:.2%}")
+
+                if full_src == "YouTube URL":
+                    assert full_url is not None
+                    full_video_id = extract_video_id(full_url)
+                    yt_link = f"https://www.youtube.com/watch?v={full_video_id}&t={int(offset_sec)}s"
+                    st.markdown(f"▶️ [Open YouTube at this timestamp]({yt_link})")
+                else:
+                    st.info("Since the full audio is a local file, navigate to this timestamp in your local media player.")
+                    
+                st.session_state["match_result"] = {
+                    "offset_sec": offset_sec,
+                    "clip_src": clip_src,
+                    "full_src": full_src,
+                    "clip_url": clip_url if clip_src == "YouTube URL" else None,
+                }
+                for k in ["cut_points", "offsets", "cut_results_table", "additional_cuts_input_val"]:
+                    if k in st.session_state:
+                        del st.session_state[k]
+
+                if confidence < 0.15:
+                    st.warning(
+                        "The confidence score is low. The match may not be accurate. "
+                        "Try using a longer or cleaner audio clip."
+                    )
 
     except Exception as e:
         status.update(label="Error occurred", state="error")
         st.error(f"An error occurred: {e}")
+
+# ── Low Confidence Candidates Display ────────────────────────────────────────
+if "low_confidence_candidates" in st.session_state:
+    lc_info = st.session_state["low_confidence_candidates"]
+    candidates = lc_info["candidates"]
+    full_url = lc_info["full_url"]
+    
+    st.subheader("🎯 Low Confidence Candidates")
+    st.warning(
+        "The highest confidence score was below 3.00%. "
+        "Showing up to 3 candidate timestamps matching the short clip:"
+    )
+    
+    for idx, (offset_sec, confidence) in enumerate(candidates):
+        hms_str = seconds_to_hms(offset_sec, ms=True)
+        line = f"**Candidate {idx+1}**: `{hms_str}` (Confidence: `{confidence:.2%}`)"
+        if lc_info["full_src"] == "YouTube URL" and full_url:
+            full_video_id = extract_video_id(full_url)
+            if full_video_id:
+                yt_link = f"https://www.youtube.com/watch?v={full_video_id}&t={int(offset_sec)}s"
+                line += f" — [▶️ Open YouTube at this timestamp]({yt_link})"
+        st.markdown(line)
+        
+    options = []
+    for idx, (offset_sec, confidence) in enumerate(candidates):
+        hms_str = seconds_to_hms(offset_sec, ms=True)
+        options.append(f"Candidate {idx+1}: {hms_str} (Conf: {confidence:.2%})")
+        
+    selected_option = st.radio(
+        "Select candidate timestamp to use for subtitle shifting:",
+        options=options,
+        index=0,
+        key="selected_lc_candidate_radio"
+    )
+    
+    selected_idx = options.index(selected_option)
+    chosen_offset, chosen_conf = candidates[selected_idx]
+    
+    st.session_state["match_result"] = {
+        "offset_sec": chosen_offset,
+        "clip_src": lc_info["clip_src"],
+        "full_src": lc_info["full_src"],
+        "clip_url": lc_info["clip_url"] if lc_info["clip_src"] == "YouTube URL" else None,
+    }
+
 
 # ── Feature: Subtitle Shifting ───────────────────────────────────────────────
 
@@ -1220,20 +1376,14 @@ if "match_result" in st.session_state:
                                         resumable=True
                                     )
                                     
-                                    request = youtube.captions().insert(
-                                        part="snippet",
-                                        body={
-                                            "snippet": {
-                                                "videoId": video_id,
-                                                "language": lang,
-                                                "name": caption_name,
-                                                "isDraft": False
-                                            }
-                                        },
-                                        media_body=media
+                                    caption_id = upload_caption_track(
+                                        youtube,
+                                        video_id=video_id,
+                                        language=lang,
+                                        name=caption_name,
+                                        media=media
                                     )
-                                    response = request.execute()
-                                    st.success(f"✅ Subtitles uploaded successfully! Caption ID: {response['id']}")
+                                    st.success(f"✅ Subtitles uploaded successfully! Caption ID: {caption_id}")
                     except Exception as e:
                         st.error(f"❌ YouTube API error: {e}")
 
