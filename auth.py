@@ -1,6 +1,13 @@
+import sys
 import os
 import json
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 
 def load_client_secrets() -> tuple[str, str] | None:
     """Load client_id and client_secret from client_secret.json."""
@@ -43,12 +50,20 @@ def authenticate():
         print(auth_url)
         print("\nWaiting for you to log in...")
 
-        # Reverted back to port 8090 because Google Cloud strictly validates the exact port
-        creds = flow.run_local_server(
-            port=8090, 
-            timeout_seconds=300, 
-            authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
-        )
+        # Try port 8090 first, fall back to dynamic port (port=0) if 8090 is already bound
+        try:
+            creds = flow.run_local_server(
+                port=8090, 
+                timeout_seconds=300, 
+                authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
+            )
+        except OSError as port_err:
+            print(f"⚠️ Port 8090 is unavailable ({port_err}). Retrying with a dynamic free port...")
+            creds = flow.run_local_server(
+                port=0, 
+                timeout_seconds=300, 
+                authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
+            )
         
         with open('token.json', 'w') as token:
             token.write(creds.to_json())

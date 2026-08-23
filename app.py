@@ -37,7 +37,7 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         sys.executable, "-m", "yt_dlp",
         "--no-playlist",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:player_client=default,-android_sdkless",
+        "--extractor-args", "youtube:player_client=android,web,mweb,ios",
         "-x",                          # extract audio
         "--audio-format", "mp3",
         "--postprocessor-args",
@@ -94,7 +94,7 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         "--print", "title",
         "--no-playlist",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:player_client=default,-android_sdkless",
+        "--extractor-args", "youtube:player_client=android,web,mweb,ios",
         url
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
@@ -149,7 +149,7 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
             sys.executable, "-m", "yt_dlp",
             "--flat-playlist",
             "--playlist-end", str(limit),
-            "--extractor-args", "youtube:player_client=default,-android_sdkless",
+            "--extractor-args", "youtube:player_client=android,web,mweb,ios",
             "--print", "%(title)s | %(id)s",
             channel_url
         ]
