@@ -668,7 +668,7 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
     with col_adhoc_lang:
         adhoc_lang = st.selectbox("Caption Language", ["en", "ko"], index=0, key="adhoc_lang")
     with col_adhoc_name:
-        adhoc_caption_name = st.text_input("Caption Track Name", value="English" if adhoc_lang == "en" else "English", key="adhoc_caption_name")
+        adhoc_caption_name = st.text_input("Caption Track Name", value="English" if adhoc_lang == "en" else "Korean", key="adhoc_caption_name")
         
     adhoc_upload_btn = st.button("📤 Upload Ad-hoc Subtitles", type="primary", key="adhoc_upload_btn", use_container_width=True)
     if adhoc_upload_btn:
@@ -1192,12 +1192,12 @@ if "match_result" in st.session_state:
         st.subheader("✂️ Detect Additional Cuts in Short Clip")
         st.markdown(
             "If the short clip has cuts (omitted sections of the full audio), "
-            "enter the cut timestamps in the short clip format (`HH:MM:SS` or `MM:SS`, comma-separated, up to 7). "
+            "enter the cut timestamps in the short clip format (`HH:MM:SS` or `MM:SS`, comma-separated, up to 10). "
             "We will search the full audio after each cut point to establish a piecewise shift."
         )
         
         additional_cuts_str = st.text_input(
-            "Cut timestamps in short clip (comma-separated, up to 7)",
+            "Cut timestamps in short clip (comma-separated, up to 10)",
             value=st.session_state.get("additional_cuts_input_val", ""),
             placeholder="e.g. 00:05:30, 00:15:45",
             key="additional_cuts_input"
@@ -1207,7 +1207,7 @@ if "match_result" in st.session_state:
         
         if analyze_cuts:
             raw_cuts = [c.strip() for c in additional_cuts_str.split(",") if c.strip()]
-            raw_cuts = raw_cuts[:7]
+            raw_cuts = raw_cuts[:10]
             
             try:
                 cut_seconds = []
@@ -1355,8 +1355,8 @@ if "match_result" in st.session_state:
                                 with open('token.json', 'w') as token_file:
                                     token_file.write(creds.to_json())
                                     
-                        lang = st.selectbox("Caption Language", ["ko", "en"], index=0)
-                        caption_name = st.text_input("Caption Track Name", value="Korean" if lang == "ko" else "English")
+                        lang = st.selectbox("Caption Language", ["en", "ko"], index=0)
+                        caption_name = st.text_input("Caption Track Name", value="English" if lang == "en" else "Korean")
                         
                         upload_btn = st.button("📤 Upload to YouTube", type="primary", use_container_width=True)
                         if upload_btn:
