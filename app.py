@@ -31,11 +31,21 @@ def sanitize_youtube_url(url: str) -> str:
     return url
 
 
+def get_subprocess_env() -> dict[str, str]:
+    """Ensure child processes (especially yt-dlp on Windows) use UTF-8 I/O encoding."""
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONLEGACYWINDOWSSTDIO"] = "0"
+    return env
+
+
 def download_youtube_audio(url: str, output_path: str) -> None:
     """Download full audio from a YouTube URL as a 16 kHz mono MP3 CBR."""
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist",
+        "--encoding", "utf-8",
         "--js-runtimes", "node",
         "--extractor-args", "youtube:player_client=android,web,mweb,ios",
         "-x",                          # extract audio
@@ -45,7 +55,7 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         "-o", output_path,
     ]
     cmd.append(url)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=get_subprocess_env())
     if result.returncode != 0:
         raise RuntimeError(
             f"yt-dlp failed (code {result.returncode}):\n{result.stderr}"
@@ -93,11 +103,12 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         "--simulate",
         "--print", "title",
         "--no-playlist",
+        "--encoding", "utf-8",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:player_client=android,web,mweb,ios",
+        "--extractor-args", "youtube:lang=ko;player_client=web,android,mweb,ios",
         url
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=get_subprocess_env())
     if result.returncode == 0:
         lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
         title = lines[-1] if lines else "Unknown Title"
@@ -108,16 +119,18 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         error_msg = m.group(1) if m else "Unknown error occurred"
         return False, error_msg
 
+
 def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -> str | None:
     """
     Search NWTVMedia for a video or stream matching the YYYYMMDD date prefix.
-    If target_type is "short_clip", searches for videos.
-    If target_type is "full_audio", searches for streams, falling back to videos.
+    If target_type is "short_clip", searches for videos matching the date followed by '[' (e.g. '2026-03-29 [').
+    If target_type is "full_audio", searches for streams (prioritizing main Sunday worship '주일예배'), falling back to videos.
     """
-    if len(date_str) != 8 or not date_str.isdigit():
+    cleaned_date = re.sub(r"[^\d]", "", str(date_str))
+    if len(cleaned_date) != 8:
         return None
     
-    y, m, d = date_str[0:4], date_str[4:6], date_str[6:8]
+    y, m, d = cleaned_date[0:4], cleaned_date[4:6], cleaned_date[6:8]
 
     # Generate matching pattern candidates
     dash_match_ymd = f"{y}-{m}-{d}"
@@ -128,7 +141,7 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
     
     import datetime
     try:
-        dt = datetime.datetime.strptime(date_str, "%Y%m%d")
+        dt = datetime.datetime.strptime(cleaned_date, "%Y%m%d")
         eng_date = dt.strftime("%B %d, %Y").replace(" 0", " ")
         eng_date_short = dt.strftime("%b %d, %Y").replace(" 0", " ")
     except Exception:
@@ -144,72 +157,91 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
                 return True
         return False
 
-    def get_channel_videos_yt_dlp(channel_url: str, limit: int = 30) -> list[dict]:
+    def get_channel_videos_yt_dlp(channel_url: str, limit: int = 35) -> list[dict]:
         cmd = [
             sys.executable, "-m", "yt_dlp",
             "--flat-playlist",
             "--playlist-end", str(limit),
-            "--extractor-args", "youtube:player_client=android,web,mweb,ios",
+            "--encoding", "utf-8",
+            "--extractor-args", "youtube:lang=ko;player_client=web,android",
             "--print", "%(title)s | %(id)s",
             channel_url
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=get_subprocess_env())
         videos = []
         if result.returncode == 0:
             for line in result.stdout.strip().split('\n'):
                 if '|' in line:
                     parts = line.split('|')
-                    title = parts[0].strip()
+                    title = '|'.join(parts[:-1]).strip()
                     video_id = parts[-1].strip()
                     videos.append({"title": title, "videoId": video_id})
         return videos
 
     if target_type == "short_clip":
+        # Short clips (sermons) on NWTVMedia include '[' after the date, e.g. "2026-03-29 [" or "2026.03.29 ["
+        short_clip_regexes = [re.compile(rf"{re.escape(p)}\s*\[") for p in patterns]
         try:
-            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=30)
+            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=35)
+            # 1. Primary match: date pattern followed by '['
+            for v in videos:
+                title = v.get('title', '')
+                if any(r.search(title) for r in short_clip_regexes):
+                    if "Live recording" not in title and "찬양" not in title and "Praise" not in title:
+                        return f"https://www.youtube.com/watch?v={v['videoId']}"
+
+            # 2. Fallback: general date match filtering out praise/live stream full recordings
             matched_videos = []
             for v in videos:
                 title = v.get('title', '')
                 if title_matches(title):
-                    # Prefer videos that look like sermons/short clips
-                    if "Live recording" not in title and "Praise" not in title and "예배" not in title and "기도회" not in title:
+                    if "Live recording" not in title and "Praise" not in title and "찬양" not in title and "예배" not in title and "기도회" not in title:
                         return f"https://www.youtube.com/watch?v={v['videoId']}"
                     matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
             if matched_videos:
-                return matched_videos[-1]
+                return matched_videos[0]
         except Exception:
             pass
         return None
 
     else:
         # target_type == "full_audio"
-        matched_streams = []
+        def score_full_audio(title: str) -> int:
+            score = 0
+            # Primary Sunday worship service: 주일예배 / 주일2부 without 저녁 / 찬양
+            if '주일' in title and '예배' in title and '저녁' not in title:
+                score += 100
+            elif '화요집회' in title or ('예배' in title and '저녁' not in title and '기도회' not in title):
+                score += 50
+            if '저녁' in title:
+                score -= 20
+            if '기도회' in title or '중보기도회' in title:
+                score -= 30
+            if '찬양' in title or 'Praise' in title:
+                score -= 40
+            if '[' in title:
+                score -= 50
+            return score
+
         try:
-            streams = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/streams", limit=30)
-            for v in streams:
-                title = v.get('title', '')
-                if title_matches(title):
-                    matched_streams.append(f"https://www.youtube.com/watch?v={v['videoId']}")
+            streams = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/streams", limit=35)
+            matched_streams = [v for v in streams if title_matches(v.get('title', ''))]
+            if matched_streams:
+                matched_streams.sort(key=lambda v: score_full_audio(v.get('title', '')), reverse=True)
+                return f"https://www.youtube.com/watch?v={matched_streams[0]['videoId']}"
         except Exception:
             pass
 
-        if matched_streams:
-            return matched_streams[-1]
-
-        matched_videos = []
         try:
-            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=30)
-            for v in videos:
-                title = v.get('title', '')
-                if title_matches(title):
-                    matched_videos.append(f"https://www.youtube.com/watch?v={v['videoId']}")
+            videos = get_channel_videos_yt_dlp("https://www.youtube.com/@nwtvmedia/videos", limit=35)
+            matched_videos = [v for v in videos if title_matches(v.get('title', ''))]
+            if matched_videos:
+                matched_videos.sort(key=lambda v: score_full_audio(v.get('title', '')), reverse=True)
+                return f"https://www.youtube.com/watch?v={matched_videos[0]['videoId']}"
         except Exception:
             pass
 
-        if matched_videos:
-            return matched_videos[-1]
-
-    return None
+        return None
 
 def load_clip(file_path: str, duration: float = CLIP_DURATION) -> np.ndarray:
     """Load the first `duration` seconds of an audio file as a 16 kHz mono array."""
@@ -752,10 +784,10 @@ with col1:
         )
         if clip_input:
             import re
-            m = re.match(r"^(\d{8})", clip_input.name)
+            m = re.search(r"(\d{4})[-._]?(\d{2})[-._]?(\d{2})", clip_input.name)
             if m:
-                date_prefix = m.group(1)
-                st.info(f"Detected date prefix: {date_prefix}")
+                date_prefix = f"{m.group(1)}{m.group(2)}{m.group(3)}"
+                st.info(f"Detected date prefix: {date_prefix} ({m.group(1)}-{m.group(2)}-{m.group(3)})")
                 
                 # --- AUTO-FETCH LOGIC ---
                 file_id = f"clip_{clip_input.name}_{clip_input.size}"
@@ -837,10 +869,10 @@ with col2:
         )
         if full_input:
             import re
-            m = re.match(r"^(\d{8})", full_input.name)
+            m = re.search(r"(\d{4})[-._]?(\d{2})[-._]?(\d{2})", full_input.name)
             if m:
-                date_prefix = m.group(1)
-                st.info(f"Detected date prefix: {date_prefix}")
+                date_prefix = f"{m.group(1)}{m.group(2)}{m.group(3)}"
+                st.info(f"Detected date prefix: {date_prefix} ({m.group(1)}-{m.group(2)}-{m.group(3)})")
 
                 # --- AUTO-FETCH LOGIC ---
                 file_id = f"full_{full_input.name}_{full_input.size}"
