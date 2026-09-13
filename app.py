@@ -675,6 +675,10 @@ if "_pending_clip_src" in st.session_state:
     del st.session_state["_pending_clip_src"]
     del st.session_state["_pending_clip_url"]
 
+if "_pending_adhoc_url" in st.session_state:
+    st.session_state.adhoc_url = st.session_state._pending_adhoc_url
+    del st.session_state["_pending_adhoc_url"]
+
 if "window_start_input" not in st.session_state:
     st.session_state["window_start_input"] = "03:30:00"
 
@@ -688,7 +692,10 @@ st.markdown(
 )
 
 # ── Ad-hoc YouTube Caption Upload Expander ────────────────────────────────────
-with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
+adhoc_label = "📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"
+if st.session_state.get("adhoc_url"):
+    adhoc_label += "  —  🟢 URL Loaded"
+with st.expander(adhoc_label, expanded=False):
     st.markdown(
         "Directly upload an existing SRT subtitle file to a YouTube video. "
         "This skips the audio timestamp search and shifts."
@@ -702,8 +709,17 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
     with col_adhoc_name:
         adhoc_caption_name = st.text_input("Caption Track Name", value="English" if adhoc_lang == "en" else "Korean", key="adhoc_caption_name")
         
+    auto_trigger_adhoc = False
+    if adhoc_srt_file and adhoc_url:
+        upload_pair_id = f"adhoc_{adhoc_url.strip()}_{adhoc_srt_file.name}_{adhoc_srt_file.size}"
+        if st.session_state.get("last_adhoc_upload_pair") != upload_pair_id:
+            st.session_state["last_adhoc_upload_pair"] = upload_pair_id
+            auto_trigger_adhoc = True
+    elif not adhoc_srt_file and "last_adhoc_upload_pair" in st.session_state:
+        del st.session_state["last_adhoc_upload_pair"]
+
     adhoc_upload_btn = st.button("📤 Upload Ad-hoc Subtitles", type="primary", key="adhoc_upload_btn", use_container_width=True)
-    if adhoc_upload_btn:
+    if adhoc_upload_btn or auto_trigger_adhoc:
         import os
         if not os.path.exists('token.json'):
             st.error("❌ Not authenticated. Please connect your YouTube account in the sidebar first.")
@@ -732,7 +748,9 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
                 if not video_id:
                     st.error("❌ Could not extract YouTube Video ID from the URL.")
                 else:
-                    with st.spinner("Uploading ad-hoc subtitles to YouTube..."):
+                    spinner_msg = "Auto-uploading ad-hoc subtitles to YouTube..." if auto_trigger_adhoc else "Uploading ad-hoc subtitles to YouTube..."
+                    with st.spinner(spinner_msg):
+                        adhoc_srt_file.seek(0)
                         content = adhoc_srt_file.read().decode("utf-8")
                         media = MediaIoBaseUpload(
                             io.BytesIO(content.encode("utf-8")),
@@ -749,6 +767,7 @@ with st.expander("📤 Ad-hoc YouTube Caption Upload (Skip Audio Finding)"):
                             media=media
                         )
                         st.success(f"✅ Ad-hoc subtitles uploaded successfully! Caption ID: {caption_id}")
+                        st.toast(f"✅ Ad-hoc subtitles uploaded to YouTube! ID: {caption_id}")
             except Exception as e:
                 if "invalid_grant" in str(e):
                     if os.path.exists('token.json'):
@@ -799,22 +818,40 @@ with col1:
                         st.success("Found a matching full audio URL! Starting find process...")
                         st.session_state.full_src = "YouTube URL"
                         st.session_state.full_url = matched_url
+                        st.session_state._pending_adhoc_url = matched_url
                         st.session_state.window_start_input = "03:30:00"
                         st.session_state.trigger_find = True
                         st.rerun()
                 # ------------------------
 
-                if st.button("Fetch URL", key="fetch_url_btn"):
-                    with st.spinner("Searching YouTube for a matching date..."):
-                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
-                    if matched_url:
-                        st.success("Found a matching full audio URL!")
-                        st.session_state.full_src = "YouTube URL"
-                        st.session_state.full_url = matched_url
-                        st.session_state.window_start_input = "03:30:00"
-                        st.rerun()
-                    else:
-                        st.error("Could not find a matching video/stream on NWTVMedia.")
+                col_fetch_btn, col_adhoc_btn = st.columns(2)
+                with col_fetch_btn:
+                    if st.button("Fetch URL", key="fetch_url_btn", use_container_width=True):
+                        with st.spinner("Searching YouTube for a matching date..."):
+                            matched_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
+                        if matched_url:
+                            st.success("Found a matching full audio URL!")
+                            st.session_state.full_src = "YouTube URL"
+                            st.session_state.full_url = matched_url
+                            st.session_state._pending_adhoc_url = matched_url
+                            st.session_state.window_start_input = "03:30:00"
+                            st.rerun()
+                        else:
+                            st.error("Could not find a matching video/stream on NWTVMedia.")
+                with col_adhoc_btn:
+                    if st.button("📋 Prepopulate Ad-hoc URL", key="prepop_adhoc_btn_col1", help="Prepopulate the found YouTube URL into the Ad-hoc Caption Upload section without expanding it", use_container_width=True):
+                        current_url = st.session_state.get("full_url")
+                        if not current_url:
+                            with st.spinner("Searching YouTube for a matching date..."):
+                                current_url = fetch_matching_youtube_url(date_prefix, target_type="full_audio")
+                        if current_url:
+                            st.session_state._pending_adhoc_url = current_url
+                            st.session_state.full_src = "YouTube URL"
+                            st.session_state.full_url = current_url
+                            st.toast("✅ Prepopulated YouTube URL for Ad-hoc Caption Upload!")
+                            st.rerun()
+                        else:
+                            st.error("Could not find a matching YouTube video on NWTVMedia.")
     else:
         clip_input = st.text_input(
             "YouTube URL of short clip",
@@ -847,20 +884,30 @@ with col2:
             placeholder="https://www.youtube.com/watch?v=...",
             key="full_url"
         )
-        if st.button("Validate Full Audio URL"):
-            if not full_input:
-                st.warning("Please enter a URL first.")
-            else:
-                clean_url = sanitize_youtube_url(full_input)
-                if not extract_video_id(clean_url):
-                    st.error("Invalid YouTube URL format.")
+        col_val, col_adhoc_col2 = st.columns(2)
+        with col_val:
+            if st.button("Validate Full Audio URL", use_container_width=True):
+                if not full_input:
+                    st.warning("Please enter a URL first.")
                 else:
-                    with st.spinner("Validating..."):
-                        is_valid, msg = check_youtube_url(clean_url)
-                    if is_valid:
-                        st.success(f"✅ Valid! Title: {msg}")
+                    clean_url = sanitize_youtube_url(full_input)
+                    if not extract_video_id(clean_url):
+                        st.error("Invalid YouTube URL format.")
                     else:
-                        st.error(f"❌ Cannot access video: {msg}")
+                        with st.spinner("Validating..."):
+                            is_valid, msg = check_youtube_url(clean_url)
+                        if is_valid:
+                            st.success(f"✅ Valid! Title: {msg}")
+                        else:
+                            st.error(f"❌ Cannot access video: {msg}")
+        with col_adhoc_col2:
+            if st.button("📋 Prepopulate Ad-hoc URL", key="prepop_adhoc_btn_col2", help="Prepopulate this URL into the Ad-hoc Caption Upload section without expanding it", use_container_width=True):
+                if full_input:
+                    st.session_state._pending_adhoc_url = full_input
+                    st.toast("✅ Prepopulated YouTube URL for Ad-hoc Caption Upload!")
+                    st.rerun()
+                else:
+                    st.warning("Please enter or fetch a YouTube URL first.")
     else:
         full_input = st.file_uploader(
             "Upload full file (MP3/WAV/M4A/MP4)",
@@ -884,20 +931,36 @@ with col2:
                         st.success("Found a matching short clip URL! Starting find process...")
                         st.session_state._pending_clip_src = "YouTube URL"
                         st.session_state._pending_clip_url = matched_url
+                        st.session_state._pending_adhoc_url = matched_url
                         st.session_state.trigger_find = True
                         st.rerun()
                 # ------------------------
 
-                if st.button("Fetch URL", key="fetch_url_btn_full"):
-                    with st.spinner("Searching YouTube for a matching date..."):
-                        matched_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
-                    if matched_url:
-                        st.success("Found a matching short clip URL!")
-                        st.session_state._pending_clip_src = "YouTube URL"
-                        st.session_state._pending_clip_url = matched_url
-                        st.rerun()
-                    else:
-                        st.error("Could not find a matching video/stream on NWTVMedia.")
+                col_fetch_full, col_adhoc_full = st.columns(2)
+                with col_fetch_full:
+                    if st.button("Fetch URL", key="fetch_url_btn_full", use_container_width=True):
+                        with st.spinner("Searching YouTube for a matching date..."):
+                            matched_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
+                        if matched_url:
+                            st.success("Found a matching short clip URL!")
+                            st.session_state._pending_clip_src = "YouTube URL"
+                            st.session_state._pending_clip_url = matched_url
+                            st.session_state._pending_adhoc_url = matched_url
+                            st.rerun()
+                        else:
+                            st.error("Could not find a matching video/stream on NWTVMedia.")
+                with col_adhoc_full:
+                    if st.button("📋 Prepopulate Ad-hoc URL", key="prepop_adhoc_btn_col_full", help="Prepopulate this short clip YouTube URL into the Ad-hoc Caption Upload section without expanding it", use_container_width=True):
+                        current_clip_url = st.session_state.get("clip_url")
+                        if not current_clip_url:
+                            with st.spinner("Searching YouTube for a matching date..."):
+                                current_clip_url = fetch_matching_youtube_url(date_prefix, target_type="short_clip")
+                        if current_clip_url:
+                            st.session_state._pending_adhoc_url = current_clip_url
+                            st.toast("✅ Prepopulated YouTube URL for Ad-hoc Caption Upload!")
+                            st.rerun()
+                        else:
+                            st.error("Could not find a matching YouTube video on NWTVMedia.")
 
 st.divider()
 
