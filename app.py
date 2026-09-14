@@ -62,7 +62,7 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         )
 
 
-def upload_caption_track(youtube, video_id: str, language: str, name: str, media) -> str:
+def upload_caption_track(youtube, video_id: str, language: str = "en", name: str = "English", media=None) -> str:
     """
     Uploads a caption track to a YouTube video.
     If a caption track with the same language and name already exists, deletes it first.
@@ -703,12 +703,6 @@ with st.expander(adhoc_label, expanded=False):
     adhoc_url = st.text_input("YouTube Video URL", key="adhoc_url", placeholder="https://www.youtube.com/watch?v=...")
     adhoc_srt_file = st.file_uploader("Upload SRT Subtitle File", type=["srt"], key="adhoc_srt")
     
-    col_adhoc_lang, col_adhoc_name = st.columns(2)
-    with col_adhoc_lang:
-        adhoc_lang = st.selectbox("Caption Language", ["en", "ko"], index=0, key="adhoc_lang")
-    with col_adhoc_name:
-        adhoc_caption_name = st.text_input("Caption Track Name", value="English" if adhoc_lang == "en" else "Korean", key="adhoc_caption_name")
-        
     auto_trigger_adhoc = False
     if adhoc_srt_file and adhoc_url:
         upload_pair_id = f"adhoc_{adhoc_url.strip()}_{adhoc_srt_file.name}_{adhoc_srt_file.size}"
@@ -762,8 +756,8 @@ with st.expander(adhoc_label, expanded=False):
                         caption_id = upload_caption_track(
                             youtube,
                             video_id=video_id,
-                            language=adhoc_lang,
-                            name=adhoc_caption_name,
+                            language="en",
+                            name="English",
                             media=media
                         )
                         st.success(f"✅ Ad-hoc subtitles uploaded successfully! Caption ID: {caption_id}")
@@ -1450,9 +1444,6 @@ if "match_result" in st.session_state:
                                 with open('token.json', 'w') as token_file:
                                     token_file.write(creds.to_json())
                                     
-                        lang = st.selectbox("Caption Language", ["en", "ko"], index=0)
-                        caption_name = st.text_input("Caption Track Name", value="English" if lang == "en" else "Korean")
-                        
                         upload_btn = st.button("📤 Upload to YouTube", type="primary", use_container_width=True)
                         if upload_btn:
                             clip_url = res.get("clip_url") or st.session_state.get("clip_url")
@@ -1474,8 +1465,8 @@ if "match_result" in st.session_state:
                                     caption_id = upload_caption_track(
                                         youtube,
                                         video_id=video_id,
-                                        language=lang,
-                                        name=caption_name,
+                                        language="en",
+                                        name="English",
                                         media=media
                                     )
                                     st.success(f"✅ Subtitles uploaded successfully! Caption ID: {caption_id}")
