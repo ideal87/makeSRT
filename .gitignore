@@ -3,6 +3,9 @@ client_secret.json
 token.json
 .env
 
+# Downloaded sermon audio
+downloads/
+
 # Python environment & cache
 __pycache__/
 *.pyc
