@@ -44,25 +44,25 @@ def authenticate():
     try:
         flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
         
-        # Generate the authorization URL manually
-        auth_url, _ = flow.authorization_url(prompt='select_account consent', access_type='offline')
-        print("🔗 If your browser doesn't open automatically, please click this link:")
-        print(auth_url)
-        print("\nWaiting for you to log in...")
+        # run_local_server prints the sign-in link itself (with the redirect_uri it listens on)
+        print("🔗 Opening your browser. If it doesn't open, click the link printed below.")
+        print("Waiting for you to log in...\n")
 
         # Try port 8090 first, fall back to dynamic port (port=0) if 8090 is already bound
         try:
             creds = flow.run_local_server(
                 port=8090, 
                 timeout_seconds=300, 
-                authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
+                prompt='select_account consent',
+                access_type='offline',
             )
         except OSError as port_err:
             print(f"⚠️ Port 8090 is unavailable ({port_err}). Retrying with a dynamic free port...")
             creds = flow.run_local_server(
                 port=0, 
                 timeout_seconds=300, 
-                authorization_prompt_kwargs={'prompt': 'select_account consent', 'access_type': 'offline'}
+                prompt='select_account consent',
+                access_type='offline',
             )
         
         with open('token.json', 'w') as token:
