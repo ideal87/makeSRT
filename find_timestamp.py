@@ -137,7 +137,7 @@ def list_channel_videos(channel_url: str, limit: int = 35) -> list[dict]:
         "--flat-playlist",
         "--playlist-end", str(limit),
         "--encoding", "utf-8",
-        "--extractor-args", "youtube:lang=ko;player_client=web,android",
+        "--extractor-args", "youtube:lang=ko",
         "--print", "%(title)s | %(id)s",
         channel_url,
     ]
@@ -176,7 +176,6 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         "--no-playlist",
         "--encoding", "utf-8",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:player_client=android,web,mweb,ios",
         "-x",                          # extract audio
         "--audio-format", "mp3",
         "--postprocessor-args",

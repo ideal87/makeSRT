@@ -47,7 +47,6 @@ def download_youtube_audio(url: str, output_path: str) -> None:
         "--no-playlist",
         "--encoding", "utf-8",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:player_client=android,web,mweb,ios",
         "-x",                          # extract audio
         "--audio-format", "mp3",
         "--postprocessor-args",
@@ -105,7 +104,7 @@ def check_youtube_url(url: str) -> tuple[bool, str]:
         "--no-playlist",
         "--encoding", "utf-8",
         "--js-runtimes", "node",
-        "--extractor-args", "youtube:lang=ko;player_client=web,android,mweb,ios",
+        "--extractor-args", "youtube:lang=ko",
         url
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=get_subprocess_env())
@@ -163,7 +162,7 @@ def fetch_matching_youtube_url(date_str: str, target_type: str = "full_audio") -
             "--flat-playlist",
             "--playlist-end", str(limit),
             "--encoding", "utf-8",
-            "--extractor-args", "youtube:lang=ko;player_client=web,android",
+            "--extractor-args", "youtube:lang=ko",
             "--print", "%(title)s | %(id)s",
             channel_url
         ]
